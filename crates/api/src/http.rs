@@ -12,6 +12,7 @@ use crate::health::healthz;
 use crate::media::{complete_upload, create_upload};
 use crate::posts::{create_post, delete_post, get_feed, get_post, get_user_posts};
 use crate::profile::{create_avatar_upload, get_user_profile, update_me};
+use crate::search::search;
 use crate::social::{toggle_comment_like, toggle_post_like, toggle_post_save};
 use crate::state::AppState;
 
@@ -28,6 +29,7 @@ pub fn router(state: AppState) -> Router {
         .route("/media/uploads", post(create_upload))
         .route("/media/uploads/:id/complete", post(complete_upload))
         .route("/feed", get(get_feed))
+        .route("/search", get(search))
         .route("/posts", post(create_post))
         .route("/posts/:id", get(get_post).delete(delete_post))
         .route("/posts/:id/like", post(toggle_post_like))
