@@ -3317,6 +3317,40 @@ pub mod conversations {
         row.map(Conversation::try_from).transpose()
     }
 
+    pub async fn list_for_user(
+        pool: &PgPool,
+        user_id: UserId,
+        limit: i64,
+    ) -> sqlx::Result<Vec<Conversation>> {
+        let rows = sqlx::query_as::<_, ConversationRow>(
+            r#"
+            SELECT
+                conversations.id,
+                conversations.kind,
+                conversations.title,
+                conversations.created_at,
+                conversations.updated_at
+            FROM conversations
+            JOIN conversation_members
+                ON conversation_members.conversation_id = conversations.id
+            LEFT JOIN messages
+                ON messages.conversation_id = conversations.id
+            WHERE conversation_members.user_id = $1
+            GROUP BY conversations.id
+            ORDER BY
+                COALESCE(max(messages.created_at), conversations.updated_at) DESC,
+                conversations.id DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(user_id.as_uuid())
+        .bind(limit.clamp(1, 100))
+        .fetch_all(pool)
+        .await?;
+
+        rows.into_iter().map(Conversation::try_from).collect()
+    }
+
     pub async fn add_member(
         pool: &PgPool,
         conversation_id: ConversationId,
@@ -3358,17 +3392,47 @@ pub mod conversations {
         Ok(rows.into_iter().map(ConversationMember::from).collect())
     }
 
-    pub async fn create_message(pool: &PgPool, input: &CreateMessage) -> sqlx::Result<Message> {
-        let row = sqlx::query_as::<_, MessageRow>(
+    pub async fn is_member(
+        pool: &PgPool,
+        conversation_id: ConversationId,
+        user_id: UserId,
+    ) -> sqlx::Result<bool> {
+        sqlx::query_scalar(
             r#"
-            INSERT INTO messages (conversation_id, author_id, body, media_id)
-            SELECT $1, $2, $3, $4
-            WHERE EXISTS (
+            SELECT EXISTS (
                 SELECT 1
                 FROM conversation_members
                 WHERE conversation_id = $1 AND user_id = $2
             )
-            RETURNING id, conversation_id, author_id, body, media_id, created_at
+            "#,
+        )
+        .bind(conversation_id.as_uuid())
+        .bind(user_id.as_uuid())
+        .fetch_one(pool)
+        .await
+    }
+
+    pub async fn create_message(pool: &PgPool, input: &CreateMessage) -> sqlx::Result<Message> {
+        let row = sqlx::query_as::<_, MessageRow>(
+            r#"
+            WITH inserted AS (
+                INSERT INTO messages (conversation_id, author_id, body, media_id)
+                SELECT $1, $2, $3, $4
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM conversation_members
+                    WHERE conversation_id = $1 AND user_id = $2
+                )
+                RETURNING id, conversation_id, author_id, body, media_id, created_at
+            ),
+            touched AS (
+                UPDATE conversations
+                SET updated_at = now()
+                WHERE id = (SELECT conversation_id FROM inserted)
+                RETURNING id
+            )
+            SELECT id, conversation_id, author_id, body, media_id, created_at
+            FROM inserted
             "#,
         )
         .bind(input.conversation_id().as_uuid())

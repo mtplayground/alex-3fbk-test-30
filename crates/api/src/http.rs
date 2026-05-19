@@ -4,6 +4,9 @@ use tower_http::trace::TraceLayer;
 
 use crate::auth::{forgot_password, login, logout, refresh, reset_password, signup, verify_email};
 use crate::comments::{create_comment, delete_comment, get_post_comments};
+use crate::conversations::{
+    create_conversation, create_message, list_conversations, list_messages, mark_conversation_read,
+};
 use crate::follows::{
     accept_follow_request, follow_user, get_followers, get_following, reject_follow_request,
     unfollow_user,
@@ -35,6 +38,15 @@ pub fn router(state: AppState) -> Router {
         .route("/explore", get(get_explore))
         .route("/feed", get(get_feed))
         .route("/search", get(search))
+        .route(
+            "/conversations",
+            get(list_conversations).post(create_conversation),
+        )
+        .route(
+            "/conversations/:id/messages",
+            get(list_messages).post(create_message),
+        )
+        .route("/conversations/:id/read", post(mark_conversation_read))
         .route("/stories", post(create_story))
         .route("/stories/feed", get(get_stories_feed))
         .route("/stories/:id/view", post(view_story))
