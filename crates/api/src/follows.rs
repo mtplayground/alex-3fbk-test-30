@@ -7,6 +7,7 @@ use zeroclaw_core::repositories::{follows, users};
 
 use crate::error::AppError;
 use crate::extractors::AuthUser;
+use crate::notifications;
 use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
@@ -50,6 +51,7 @@ pub async fn follow_user(
     };
     let follow =
         follows::upsert(state.db_pool(), auth_user.id(), followee.id(), state_value).await?;
+    notifications::emit_follow(&state, auth_user.id(), followee.id()).await;
 
     Ok(Json(FollowResponse::from(follow)))
 }

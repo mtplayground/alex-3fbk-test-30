@@ -15,6 +15,7 @@ use zeroclaw_core::repositories::conversations;
 
 use crate::error::AppError;
 use crate::extractors::AuthUser;
+use crate::notifications;
 use crate::state::AppState;
 
 const DEFAULT_PAGE_LIMIT: i64 = 20;
@@ -183,8 +184,16 @@ pub async fn create_message(
     let message = conversations::create_message(state.db_pool(), &input)
         .await
         .map_err(map_message_write_error)?;
+    let message_id = message.id().as_uuid();
     let response = MessageResponse::from(message);
     publish_message_event(&state, conversation_id, &response).await;
+    notifications::emit_dm(
+        &state,
+        auth_user.id(),
+        conversation_id.as_uuid(),
+        message_id,
+    )
+    .await;
 
     Ok((StatusCode::CREATED, Json(response)))
 }

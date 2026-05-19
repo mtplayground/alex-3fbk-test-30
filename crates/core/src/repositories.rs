@@ -3510,3 +3510,184 @@ pub mod conversations {
         })
     }
 }
+
+pub mod notifications {
+    use chrono::{DateTime, Utc};
+    use sqlx::{FromRow, PgPool};
+    use uuid::Uuid;
+
+    use crate::models::UserId;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum NotificationKind {
+        Like,
+        Comment,
+        Follow,
+        Mention,
+        Dm,
+    }
+
+    impl NotificationKind {
+        pub const fn as_str(self) -> &'static str {
+            match self {
+                Self::Like => "like",
+                Self::Comment => "comment",
+                Self::Follow => "follow",
+                Self::Mention => "mention",
+                Self::Dm => "dm",
+            }
+        }
+
+        fn from_str(value: &str) -> Option<Self> {
+            match value {
+                "like" => Some(Self::Like),
+                "comment" => Some(Self::Comment),
+                "follow" => Some(Self::Follow),
+                "mention" => Some(Self::Mention),
+                "dm" => Some(Self::Dm),
+                _ => None,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum NotificationTargetKind {
+        Post,
+        Comment,
+        User,
+        Message,
+        Conversation,
+    }
+
+    impl NotificationTargetKind {
+        pub const fn as_str(self) -> &'static str {
+            match self {
+                Self::Post => "post",
+                Self::Comment => "comment",
+                Self::User => "user",
+                Self::Message => "message",
+                Self::Conversation => "conversation",
+            }
+        }
+
+        fn from_str(value: &str) -> Option<Self> {
+            match value {
+                "post" => Some(Self::Post),
+                "comment" => Some(Self::Comment),
+                "user" => Some(Self::User),
+                "message" => Some(Self::Message),
+                "conversation" => Some(Self::Conversation),
+                _ => None,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct Notification {
+        pub id: Uuid,
+        pub user_id: UserId,
+        pub kind: NotificationKind,
+        pub actor_id: UserId,
+        pub target_kind: NotificationTargetKind,
+        pub target_id: Uuid,
+        pub read_at: Option<DateTime<Utc>>,
+        pub created_at: DateTime<Utc>,
+    }
+
+    pub struct CreateNotification {
+        pub user_id: UserId,
+        pub kind: NotificationKind,
+        pub actor_id: UserId,
+        pub target_kind: NotificationTargetKind,
+        pub target_id: Uuid,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct NotificationRow {
+        id: Uuid,
+        user_id: Uuid,
+        kind: String,
+        actor_id: Uuid,
+        target_kind: String,
+        target_id: Uuid,
+        read_at: Option<DateTime<Utc>>,
+        created_at: DateTime<Utc>,
+    }
+
+    impl TryFrom<NotificationRow> for Notification {
+        type Error = sqlx::Error;
+
+        fn try_from(row: NotificationRow) -> Result<Self, Self::Error> {
+            let kind =
+                NotificationKind::from_str(&row.kind).ok_or_else(|| sqlx::Error::ColumnDecode {
+                    index: "kind".to_owned(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("unknown notification kind {:?}", row.kind),
+                    )
+                    .into(),
+                })?;
+            let target_kind = NotificationTargetKind::from_str(&row.target_kind).ok_or_else(
+                || sqlx::Error::ColumnDecode {
+                    index: "target_kind".to_owned(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("unknown notification target kind {:?}", row.target_kind),
+                    )
+                    .into(),
+                },
+            )?;
+
+            Ok(Self {
+                id: row.id,
+                user_id: UserId::from(row.user_id),
+                kind,
+                actor_id: UserId::from(row.actor_id),
+                target_kind,
+                target_id: row.target_id,
+                read_at: row.read_at,
+                created_at: row.created_at,
+            })
+        }
+    }
+
+    pub async fn create(
+        pool: &PgPool,
+        input: &CreateNotification,
+    ) -> sqlx::Result<Option<Notification>> {
+        if input.user_id == input.actor_id {
+            return Ok(None);
+        }
+
+        let row = sqlx::query_as::<_, NotificationRow>(
+            r#"
+            INSERT INTO notifications (
+                user_id,
+                kind,
+                actor_id,
+                target_kind,
+                target_id
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING
+                id,
+                user_id,
+                kind,
+                actor_id,
+                target_kind,
+                target_id,
+                read_at,
+                created_at
+            "#,
+        )
+        .bind(input.user_id.as_uuid())
+        .bind(input.kind.as_str())
+        .bind(input.actor_id.as_uuid())
+        .bind(input.target_kind.as_str())
+        .bind(input.target_id)
+        .fetch_one(pool)
+        .await?;
+
+        Notification::try_from(row).map(Some)
+    }
+}
