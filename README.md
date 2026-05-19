@@ -33,6 +33,7 @@ environment in production.
 
 - `DATABASE_URL`: required PostgreSQL connection string
 - `REDIS_URL`: required Redis connection string
+- `REDIS_KEY_PREFIX`: optional Redis key/channel namespace, defaults to `zeroclaw`
 - `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`: required S3-compatible object storage settings
 - `JWT_SECRET`: required signing secret
 - `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`: required email settings
