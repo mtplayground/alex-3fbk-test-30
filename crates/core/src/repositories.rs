@@ -3,7 +3,7 @@ pub mod users {
     use sqlx::{FromRow, PgPool};
     use uuid::Uuid;
 
-    use crate::models::{CreateUser, User, UserId};
+    use crate::models::{CreateUser, UpdateUserProfile, User, UserId};
 
     #[derive(Debug, FromRow)]
     struct UserRow {
@@ -164,6 +164,81 @@ pub mod users {
         )
         .bind(id.as_uuid())
         .bind(password_hash)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(User::from(row))
+    }
+
+    pub async fn update_profile(
+        pool: &PgPool,
+        id: UserId,
+        input: &UpdateUserProfile,
+    ) -> sqlx::Result<User> {
+        let link_value = input.link().flatten().map(str::to_owned);
+        let should_update_link = input.link().is_some();
+
+        let row = sqlx::query_as::<_, UserRow>(
+            r#"
+            UPDATE users
+            SET
+                display_name = COALESCE($2, display_name),
+                bio = COALESCE($3, bio),
+                link = CASE WHEN $4 THEN $5 ELSE link END,
+                is_private = COALESCE($6, is_private)
+            WHERE id = $1
+            RETURNING
+                id,
+                email,
+                handle,
+                password_hash,
+                display_name,
+                bio,
+                link,
+                avatar_key,
+                is_private,
+                email_verified_at,
+                created_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(input.display_name())
+        .bind(input.bio())
+        .bind(should_update_link)
+        .bind(link_value.as_deref())
+        .bind(input.is_private())
+        .fetch_one(pool)
+        .await?;
+
+        Ok(User::from(row))
+    }
+
+    pub async fn update_avatar_key(
+        pool: &PgPool,
+        id: UserId,
+        avatar_key: &str,
+    ) -> sqlx::Result<User> {
+        let row = sqlx::query_as::<_, UserRow>(
+            r#"
+            UPDATE users
+            SET avatar_key = $2
+            WHERE id = $1
+            RETURNING
+                id,
+                email,
+                handle,
+                password_hash,
+                display_name,
+                bio,
+                link,
+                avatar_key,
+                is_private,
+                email_verified_at,
+                created_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(avatar_key)
         .fetch_one(pool)
         .await?;
 

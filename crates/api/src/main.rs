@@ -1,6 +1,7 @@
 use std::process::ExitCode;
 
 use tracing_subscriber::EnvFilter;
+use zeroclaw_core::storage::ObjectStorage;
 use zeroclaw_core::{db, redis::RedisClient, Config, ServiceRole};
 
 mod auth;
@@ -9,6 +10,7 @@ mod error;
 pub mod extractors;
 mod health;
 mod http;
+mod profile;
 mod state;
 
 use crate::error::AppError;
@@ -43,6 +45,7 @@ async fn run() -> Result<(), AppError> {
         config.jwt().clone(),
         config.smtp().clone(),
         config.public_base_url().to_owned(),
+        ObjectStorage::new(config.s3()),
     );
     let router = http::router(state);
     let listener = tokio::net::TcpListener::bind(&bind_address).await?;

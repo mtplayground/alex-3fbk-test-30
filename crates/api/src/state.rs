@@ -1,5 +1,6 @@
 use redis::aio::ConnectionManager;
 use sqlx::PgPool;
+use zeroclaw_core::storage::ObjectStorage;
 use zeroclaw_core::{JwtConfig, SmtpConfig};
 
 #[derive(Clone)]
@@ -9,6 +10,7 @@ pub struct AppState {
     jwt: JwtConfig,
     smtp: SmtpConfig,
     public_base_url: String,
+    storage: ObjectStorage,
 }
 
 impl AppState {
@@ -18,6 +20,7 @@ impl AppState {
         jwt: JwtConfig,
         smtp: SmtpConfig,
         public_base_url: String,
+        storage: ObjectStorage,
     ) -> Self {
         Self {
             db_pool,
@@ -25,6 +28,7 @@ impl AppState {
             jwt,
             smtp,
             public_base_url,
+            storage,
         }
     }
 
@@ -46,5 +50,9 @@ impl AppState {
 
     pub fn public_base_url(&self) -> &str {
         &self.public_base_url
+    }
+
+    pub const fn storage(&self) -> &ObjectStorage {
+        &self.storage
     }
 }
