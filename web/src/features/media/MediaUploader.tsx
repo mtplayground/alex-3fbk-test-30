@@ -15,6 +15,7 @@ export type MediaUploadSurface = 'post' | 'story' | 'reel' | 'dm';
 export type MediaUploadResult = MediaUploadCompleteResponse & {
   file_name: string;
   kind: MediaKind;
+  preview_url?: string;
 };
 
 type UploadItem = {
@@ -91,6 +92,7 @@ export function MediaUploader({
         ...completed,
         file_name: file.name,
         kind: item.kind,
+        preview_url: URL.createObjectURL(file),
       });
     } catch (error) {
       markFailed(item.id, errorMessage(error));

@@ -1,5 +1,5 @@
 import { useAuth } from '../features/auth/AuthProvider';
-import { MediaUploader } from '../features/media/MediaUploader';
+import { PostComposer } from '../features/posts/PostComposer';
 
 const posts = [
   {
@@ -34,7 +34,7 @@ export function HomePage() {
         </div>
       </div>
 
-      {auth.isAuthenticated ? <MediaUploader surface="post" /> : null}
+      {auth.isAuthenticated ? <PostComposer /> : null}
 
       <div className="grid gap-5">
         {posts.map((post) => (
