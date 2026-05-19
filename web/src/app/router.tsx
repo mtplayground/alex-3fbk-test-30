@@ -10,6 +10,7 @@ import { LoginPage } from '../routes/LoginPage';
 import { NotFoundPage } from '../routes/NotFoundPage';
 import { PostPage } from '../routes/PostPage';
 import { ProfilePage } from '../routes/ProfilePage';
+import { ProfileSettingsPage } from '../routes/ProfileSettingsPage';
 import { ResetPasswordPage } from '../routes/ResetPasswordPage';
 import { SignupPage } from '../routes/SignupPage';
 
@@ -28,7 +29,10 @@ export const router = createBrowserRouter([
       { path: 'u/:handle', element: <ProfilePage /> },
       {
         element: <ProtectedRoute />,
-        children: [{ path: 'dm', element: <DirectMessagesPage /> }],
+        children: [
+          { path: 'dm', element: <DirectMessagesPage /> },
+          { path: 'settings/profile', element: <ProfileSettingsPage /> },
+        ],
       },
       { path: '*', element: <NotFoundPage /> },
     ],
