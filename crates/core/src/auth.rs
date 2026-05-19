@@ -2,12 +2,15 @@ use argon2::password_hash::{
     Error as PasswordHashError, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
 };
 use argon2::{Algorithm, Argon2, Params, Version};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{
     decode, encode, Algorithm as JwtAlgorithm, DecodingKey, EncodingKey, Header, Validation,
 };
-use rand_core::OsRng;
+use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -16,6 +19,7 @@ use crate::models::UserId;
 
 const ACCESS_TOKEN_MINUTES: i64 = 15;
 const REFRESH_TOKEN_DAYS: i64 = 30;
+const OPAQUE_TOKEN_BYTES: usize = 32;
 
 pub type Result<T> = std::result::Result<T, AuthError>;
 
@@ -148,6 +152,17 @@ pub fn verify_password(password: &str, password_hash: &str) -> Result<bool> {
     }
 }
 
+pub fn generate_opaque_token() -> String {
+    let mut bytes = [0_u8; OPAQUE_TOKEN_BYTES];
+    OsRng.fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+pub fn hash_opaque_token(token: &str) -> String {
+    let digest = Sha256::digest(token.as_bytes());
+    URL_SAFE_NO_PAD.encode(digest)
+}
+
 pub fn sign_access_token(jwt: &JwtConfig, user_id: UserId) -> Result<SignedToken> {
     let now = Utc::now();
     let expires_at = access_token_expires_at(now);
@@ -236,6 +251,15 @@ mod tests {
 
         assert!(verify_password("correct horse battery staple", &hash).expect("hash should verify"));
         assert!(!verify_password("wrong password", &hash).expect("hash should verify"));
+    }
+
+    #[test]
+    fn opaque_token_hash_is_stable_and_not_plaintext() {
+        let token = "opaque-token";
+        let hash = hash_opaque_token(token);
+
+        assert_eq!(hash, hash_opaque_token(token));
+        assert_ne!(hash, token);
     }
 
     #[test]

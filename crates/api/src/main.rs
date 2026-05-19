@@ -4,6 +4,7 @@ use tracing_subscriber::EnvFilter;
 use zeroclaw_core::{db, redis::RedisClient, Config, ServiceRole};
 
 mod auth;
+mod email;
 mod error;
 mod health;
 mod http;
@@ -35,7 +36,13 @@ async fn run() -> Result<(), AppError> {
     let redis_client = RedisClient::new(&config)?;
     let redis_manager = redis_client.connection_manager().await?;
 
-    let state = AppState::new(pool, redis_manager, config.jwt().clone());
+    let state = AppState::new(
+        pool,
+        redis_manager,
+        config.jwt().clone(),
+        config.smtp().clone(),
+        config.public_base_url().to_owned(),
+    );
     let router = http::router(state);
     let listener = tokio::net::TcpListener::bind(&bind_address).await?;
 
