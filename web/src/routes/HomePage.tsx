@@ -13,16 +13,9 @@ import {
   type PostMedia,
   type PostResponse,
 } from '../features/posts/api';
+import { StoriesRail } from '../features/stories/StoriesRail';
 
 const MEDIA_BASE_URL = import.meta.env.VITE_MEDIA_BASE_URL ?? '';
-
-const storyPlaceholders = [
-  { handle: 'mira', tone: 'bg-rose-100 text-rose-950' },
-  { handle: 'atlas', tone: 'bg-cyan-100 text-cyan-950' },
-  { handle: 'noor', tone: 'bg-emerald-100 text-emerald-950' },
-  { handle: 'zero', tone: 'bg-amber-100 text-amber-950' },
-  { handle: 'studio', tone: 'bg-slate-100 text-slate-950' },
-];
 
 export function HomePage() {
   const auth = useAuth();
@@ -111,23 +104,6 @@ export function HomePage() {
         </div>
       ) : null}
     </div>
-  );
-}
-
-function StoriesRail() {
-  return (
-    <section className="overflow-hidden rounded-lg border border-slate-200 bg-white p-4 shadow-soft">
-      <div className="flex gap-3 overflow-x-auto">
-        {storyPlaceholders.map((story) => (
-          <Link key={story.handle} to={`/u/${story.handle}`} className="grid w-20 shrink-0 justify-items-center gap-2">
-            <div className={`grid size-16 place-items-center rounded-full ${story.tone} text-lg font-semibold`}>
-              {story.handle.slice(0, 1).toUpperCase()}
-            </div>
-            <span className="max-w-full truncate text-xs font-semibold text-slate-600">@{story.handle}</span>
-          </Link>
-        ))}
-      </div>
-    </section>
   );
 }
 
