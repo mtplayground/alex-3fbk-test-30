@@ -3,7 +3,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
 use thiserror::Error;
-use zeroclaw_core::{auth::AuthError, ConfigError};
+use zeroclaw_core::{auth::AuthError, storage::StorageError, ConfigError};
 
 use crate::email::EmailError;
 
@@ -18,6 +18,9 @@ pub enum AppError {
     #[error("conflict: {0}")]
     Conflict(&'static str),
 
+    #[error("not found")]
+    NotFound,
+
     #[error("configuration error: {0}")]
     Config(#[from] ConfigError),
 
@@ -26,6 +29,9 @@ pub enum AppError {
 
     #[error("email error: {0}")]
     Email(#[from] EmailError),
+
+    #[error("storage error: {0}")]
+    Storage(#[from] StorageError),
 
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
@@ -55,12 +61,14 @@ impl AppError {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::NotFound => StatusCode::NOT_FOUND,
             Self::Database(_) | Self::Migration(_) | Self::Redis(_) => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
             Self::Config(_)
             | Self::Auth(_)
             | Self::Email(_)
+            | Self::Storage(_)
             | Self::Io(_)
             | Self::Server(_)
             | Self::Internal(_)
@@ -73,9 +81,11 @@ impl AppError {
             Self::BadRequest(_) => "bad_request",
             Self::Unauthorized => "unauthorized",
             Self::Conflict(_) => "conflict",
+            Self::NotFound => "not_found",
             Self::Config(_) => "configuration_error",
             Self::Auth(_) => "authentication_error",
             Self::Email(_) => "email_error",
+            Self::Storage(_) => "storage_error",
             Self::Database(_) => "database_error",
             Self::Migration(_) => "migration_error",
             Self::Redis(_) => "redis_error",

@@ -205,6 +205,56 @@ pub struct CreateUser {
     is_private: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct UpdateUserProfile {
+    display_name: Option<String>,
+    bio: Option<String>,
+    link: Option<Option<String>>,
+    is_private: Option<bool>,
+}
+
+impl UpdateUserProfile {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
+        self.display_name = Some(display_name.into());
+        self
+    }
+
+    pub fn with_bio(mut self, bio: impl Into<String>) -> Self {
+        self.bio = Some(bio.into());
+        self
+    }
+
+    pub fn with_link(mut self, link: Option<String>) -> Self {
+        self.link = Some(link);
+        self
+    }
+
+    pub const fn with_is_private(mut self, is_private: bool) -> Self {
+        self.is_private = Some(is_private);
+        self
+    }
+
+    pub fn display_name(&self) -> Option<&str> {
+        self.display_name.as_deref()
+    }
+
+    pub fn bio(&self) -> Option<&str> {
+        self.bio.as_deref()
+    }
+
+    pub fn link(&self) -> Option<Option<&str>> {
+        self.link.as_ref().map(|value| value.as_deref())
+    }
+
+    pub const fn is_private(&self) -> Option<bool> {
+        self.is_private
+    }
+}
+
 impl CreateUser {
     pub fn new(
         email: impl Into<String>,
