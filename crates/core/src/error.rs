@@ -23,6 +23,9 @@ pub enum ConfigError {
         #[source]
         source: ParseIntError,
     },
+
+    #[error("environment variable {name} has invalid URL value {value:?}")]
+    InvalidUrl { name: &'static str, value: String },
 }
 
 impl ConfigError {

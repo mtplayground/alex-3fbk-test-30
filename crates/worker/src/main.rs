@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 use anyhow::{anyhow, Result};
 use tracing_subscriber::EnvFilter;
-use zeroclaw_core::{AppConfig, ServiceRole};
+use zeroclaw_core::{Config, ServiceRole};
 
 fn main() -> ExitCode {
     match run() {
@@ -17,11 +17,12 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     init_tracing()?;
 
-    let config = AppConfig::from_env(ServiceRole::Worker)?;
+    let config = Config::from_env(ServiceRole::Worker)?;
 
     tracing::info!(
         service = config.service_name(),
         role = ?config.role(),
+        public_base_url = %config.public_base_url(),
         "worker crate initialized"
     );
 
