@@ -11,7 +11,7 @@ use zeroclaw_core::models::UserId;
 use zeroclaw_core::repositories::{posts, users};
 
 use crate::error::AppError;
-use crate::extractors::AuthUser;
+use crate::extractors::{AuthUser, OptionalAuthUser};
 use crate::state::AppState;
 
 const DEFAULT_PAGE_LIMIT: i64 = 20;
@@ -30,6 +30,14 @@ pub struct CreatePostRequest {
 pub struct PostsQuery {
     cursor: Option<String>,
     limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExploreQuery {
+    cursor: Option<String>,
+    limit: Option<i64>,
+    hashtag: Option<String>,
+    place: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -195,6 +203,44 @@ pub async fn get_feed(
     Ok(Json(response))
 }
 
+pub async fn get_explore(
+    State(state): State<AppState>,
+    OptionalAuthUser(auth_user): OptionalAuthUser,
+    Query(query): Query<ExploreQuery>,
+) -> Result<Json<PostsPageResponse>, AppError> {
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_PAGE_LIMIT)
+        .clamp(1, MAX_PAGE_LIMIT);
+    let cursor = parse_feed_cursor(query.cursor)?;
+    let hashtag = normalize_hashtag(query.hashtag)?;
+    let place = normalize_place(query.place);
+    let explore_posts = posts::list_explore(
+        state.db_pool(),
+        auth_user.map(|user| user.id()),
+        hashtag.as_deref(),
+        place.as_deref(),
+        cursor,
+        limit + 1,
+    )
+    .await?;
+    let has_next = explore_posts.len() > limit as usize;
+    let page_posts: Vec<_> = explore_posts.into_iter().take(limit as usize).collect();
+    let next_cursor = if has_next {
+        page_posts.last().map(feed_cursor)
+    } else {
+        None
+    };
+
+    Ok(Json(PostsPageResponse {
+        posts: page_posts
+            .into_iter()
+            .map(|explore_post| PostResponse::from(explore_post.post))
+            .collect(),
+        next_cursor,
+    }))
+}
+
 impl From<posts::Post> for PostResponse {
     fn from(post: posts::Post) -> Self {
         Self {
@@ -326,6 +372,27 @@ fn normalize_location(location: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn normalize_hashtag(hashtag: Option<String>) -> Result<Option<String>, AppError> {
+    let Some(hashtag) = hashtag else {
+        return Ok(None);
+    };
+    let hashtag = hashtag.trim().trim_start_matches('#').to_ascii_lowercase();
+    if hashtag.is_empty() {
+        return Ok(None);
+    }
+    if hashtag.chars().all(is_entity_char) {
+        Ok(Some(hashtag))
+    } else {
+        Err(AppError::BadRequest("hashtag"))
+    }
+}
+
+fn normalize_place(place: Option<String>) -> Option<String> {
+    place
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
 fn parse_cursor(cursor: Option<String>) -> Result<Option<DateTime<Utc>>, AppError> {
     let Some(cursor) = cursor else {
         return Ok(None);
@@ -435,6 +502,22 @@ mod tests {
                     .to_owned()
             )),
             Err(AppError::BadRequest("cursor"))
+        ));
+    }
+
+    #[test]
+    fn normalize_hashtag_strips_marker_and_lowercases() {
+        assert_eq!(
+            normalize_hashtag(Some(" #Rust_2026 ".to_owned())).expect("valid"),
+            Some("rust_2026".to_owned())
+        );
+    }
+
+    #[test]
+    fn normalize_hashtag_rejects_invalid_characters() {
+        assert!(matches!(
+            normalize_hashtag(Some("bad-tag".to_owned())),
+            Err(AppError::BadRequest("hashtag"))
         ));
     }
 }

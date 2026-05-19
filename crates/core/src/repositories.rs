@@ -1520,6 +1520,123 @@ pub mod posts {
         Ok(posts)
     }
 
+    pub async fn list_explore(
+        pool: &PgPool,
+        viewer_id: Option<UserId>,
+        hashtag: Option<&str>,
+        place: Option<&str>,
+        cursor: Option<FeedCursor>,
+        limit: i64,
+    ) -> sqlx::Result<Vec<FeedPost>> {
+        let rows = sqlx::query_as::<_, FeedPostRow>(
+            r#"
+            WITH explore_posts AS (
+                SELECT
+                    posts.id,
+                    posts.author_id,
+                    users.handle AS author_handle,
+                    posts.caption,
+                    posts.location,
+                    posts.created_at,
+                    (
+                        COUNT(DISTINCT post_likes.user_id)::double precision * 3
+                        + COUNT(DISTINCT comments.id)::double precision * 2
+                        + COUNT(DISTINCT saves.user_id)::double precision * 4
+                        + GREATEST(
+                            0::double precision,
+                            168::double precision - (EXTRACT(EPOCH FROM (now() - posts.created_at)) / 3600)
+                        ) / 168::double precision
+                    )::double precision AS rank_score
+                FROM posts
+                JOIN users ON users.id = posts.author_id
+                LEFT JOIN likes AS post_likes
+                    ON post_likes.target_kind = 'post'
+                    AND post_likes.target_id = posts.id
+                LEFT JOIN comments ON comments.post_id = posts.id
+                LEFT JOIN saves ON saves.post_id = posts.id
+                WHERE posts.deleted_at IS NULL
+                    AND posts.created_at >= now() - interval '30 days'
+                    AND ($1::uuid IS NULL OR posts.author_id <> $1)
+                    AND (
+                        $1::uuid IS NULL
+                        OR NOT EXISTS (
+                            SELECT 1
+                            FROM follows
+                            WHERE follows.follower_id = $1
+                                AND follows.followee_id = posts.author_id
+                                AND follows.state = 'accepted'
+                        )
+                    )
+                    AND (
+                        $2::text IS NULL
+                        OR EXISTS (
+                            SELECT 1
+                            FROM post_hashtags
+                            JOIN hashtags ON hashtags.id = post_hashtags.hashtag_id
+                            WHERE post_hashtags.post_id = posts.id
+                                AND hashtags.name = $2
+                        )
+                    )
+                    AND (
+                        $3::text IS NULL
+                        OR lower(posts.location) = lower($3)
+                    )
+                GROUP BY
+                    posts.id,
+                    posts.author_id,
+                    users.handle,
+                    posts.caption,
+                    posts.location,
+                    posts.created_at
+            )
+            SELECT
+                id,
+                author_id,
+                author_handle,
+                caption,
+                location,
+                created_at,
+                rank_score
+            FROM explore_posts
+            WHERE
+                $4::double precision IS NULL
+                OR rank_score < $4
+                OR (rank_score = $4 AND created_at < $5)
+                OR (rank_score = $4 AND created_at = $5 AND id < $6)
+            ORDER BY rank_score DESC, created_at DESC, id DESC
+            LIMIT $7
+            "#,
+        )
+        .bind(viewer_id.map(|id| id.as_uuid()))
+        .bind(hashtag)
+        .bind(place)
+        .bind(cursor.map(|cursor| cursor.rank_score))
+        .bind(cursor.map(|cursor| cursor.created_at))
+        .bind(cursor.map(|cursor| cursor.id))
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+
+        let mut posts = Vec::with_capacity(rows.len());
+        for row in rows {
+            let rank_score = row.rank_score;
+            let post_row = PostRow {
+                id: row.id,
+                author_id: row.author_id,
+                author_handle: row.author_handle,
+                caption: row.caption,
+                location: row.location,
+                created_at: row.created_at,
+            };
+            posts.push(FeedPost {
+                post: hydrate(pool, post_row).await?,
+                rank_score,
+            });
+        }
+
+        Ok(posts)
+    }
+
     pub async fn soft_delete(pool: &PgPool, id: Uuid, author_id: UserId) -> sqlx::Result<bool> {
         let result = sqlx::query(
             r#"
