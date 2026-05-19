@@ -1,5 +1,7 @@
+use axum::extract::{Query, State};
+use axum::Json;
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zeroclaw_core::models::{ConversationId, UserId};
 use zeroclaw_core::repositories::notifications::{
@@ -7,10 +9,21 @@ use zeroclaw_core::repositories::notifications::{
 };
 use zeroclaw_core::repositories::{conversations, posts, social::LikeTargetKind};
 
+use crate::error::AppError;
+use crate::extractors::AuthUser;
 use crate::state::AppState;
 
+const DEFAULT_PAGE_LIMIT: i64 = 20;
+const MAX_PAGE_LIMIT: i64 = 50;
+
+#[derive(Debug, Deserialize)]
+pub struct NotificationsQuery {
+    cursor: Option<String>,
+    limit: Option<i64>,
+}
+
 #[derive(Debug, Serialize)]
-struct NotificationEvent {
+pub struct NotificationResponse {
     id: String,
     user_id: String,
     kind: &'static str,
@@ -19,6 +32,72 @@ struct NotificationEvent {
     target_id: String,
     read_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NotificationsPageResponse {
+    notifications: Vec<NotificationResponse>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UnreadCountResponse {
+    unread_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReadAllResponse {
+    updated_count: u64,
+}
+
+pub async fn list_notifications(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Query(query): Query<NotificationsQuery>,
+) -> Result<Json<NotificationsPageResponse>, AppError> {
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_PAGE_LIMIT)
+        .clamp(1, MAX_PAGE_LIMIT);
+    let cursor = parse_notification_cursor(query.cursor)?;
+    let notifications =
+        notifications::list_for_user(state.db_pool(), auth_user.id(), cursor, limit + 1).await?;
+    let has_next = notifications.len() > limit as usize;
+    let page_notifications = notifications
+        .into_iter()
+        .take(limit as usize)
+        .collect::<Vec<_>>();
+    let next_cursor = if has_next {
+        page_notifications.last().map(notification_cursor)
+    } else {
+        None
+    };
+
+    Ok(Json(NotificationsPageResponse {
+        notifications: page_notifications
+            .into_iter()
+            .map(NotificationResponse::from)
+            .collect(),
+        next_cursor,
+    }))
+}
+
+pub async fn mark_all_notifications_read(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+) -> Result<Json<ReadAllResponse>, AppError> {
+    let updated_count = notifications::mark_all_read(state.db_pool(), auth_user.id()).await?;
+
+    Ok(Json(ReadAllResponse { updated_count }))
+}
+
+pub async fn unread_notification_count(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+) -> Result<Json<UnreadCountResponse>, AppError> {
+    let unread_count = notifications::unread_count(state.db_pool(), auth_user.id()).await?;
+
+    Ok(Json(UnreadCountResponse { unread_count }))
 }
 
 pub async fn emit_like(
@@ -164,10 +243,10 @@ async fn emit(state: &AppState, input: CreateNotification) {
         }
     };
 
-    publish(state, NotificationEvent::from(notification)).await;
+    publish(state, NotificationResponse::from(notification)).await;
 }
 
-async fn publish(state: &AppState, event: NotificationEvent) {
+async fn publish(state: &AppState, event: NotificationResponse) {
     let channel = state.redis_namespace().channel(["user", &event.user_id]);
     let payload = match serde_json::to_string(&serde_json::json!({
         "type": "notification",
@@ -232,7 +311,43 @@ async fn comment_author_id(state: &AppState, comment_id: Uuid) -> sqlx::Result<O
     Ok(row.map(UserId::from))
 }
 
-impl From<notifications::Notification> for NotificationEvent {
+fn parse_notification_cursor(
+    cursor: Option<String>,
+) -> Result<Option<notifications::NotificationCursor>, AppError> {
+    let Some(cursor) = cursor else {
+        return Ok(None);
+    };
+    let cursor = cursor.trim();
+    if cursor.is_empty() {
+        return Ok(None);
+    }
+
+    let mut parts = cursor.split('|');
+    let Some(created_at) = parts.next() else {
+        return Err(AppError::BadRequest("cursor"));
+    };
+    let Some(id) = parts.next() else {
+        return Err(AppError::BadRequest("cursor"));
+    };
+    if parts.next().is_some() {
+        return Err(AppError::BadRequest("cursor"));
+    }
+
+    let created_at =
+        DateTime::parse_from_rfc3339(created_at).map_err(|_| AppError::BadRequest("cursor"))?;
+    let id = Uuid::parse_str(id).map_err(|_| AppError::BadRequest("cursor"))?;
+
+    Ok(Some(notifications::NotificationCursor {
+        created_at: created_at.with_timezone(&Utc),
+        id,
+    }))
+}
+
+fn notification_cursor(notification: &notifications::Notification) -> String {
+    format!("{}|{}", notification.created_at.to_rfc3339(), notification.id)
+}
+
+impl From<notifications::Notification> for NotificationResponse {
     fn from(notification: notifications::Notification) -> Self {
         Self {
             id: notification.id.to_string(),
@@ -252,7 +367,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn notification_event_maps_storage_values() {
+    fn notification_response_maps_storage_values() {
         assert_eq!(NotificationKind::Like.as_str(), "like");
         assert_eq!(NotificationKind::Dm.as_str(), "dm");
         assert_eq!(NotificationTargetKind::Message.as_str(), "message");

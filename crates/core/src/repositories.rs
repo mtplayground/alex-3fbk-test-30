@@ -3602,6 +3602,12 @@ pub mod notifications {
         pub target_id: Uuid,
     }
 
+    #[derive(Debug, Clone, Copy)]
+    pub struct NotificationCursor {
+        pub created_at: DateTime<Utc>,
+        pub id: Uuid,
+    }
+
     #[derive(Debug, FromRow)]
     struct NotificationRow {
         id: Uuid,
@@ -3689,5 +3695,70 @@ pub mod notifications {
         .await?;
 
         Notification::try_from(row).map(Some)
+    }
+
+    pub async fn list_for_user(
+        pool: &PgPool,
+        user_id: UserId,
+        before: Option<NotificationCursor>,
+        limit: i64,
+    ) -> sqlx::Result<Vec<Notification>> {
+        let rows = sqlx::query_as::<_, NotificationRow>(
+            r#"
+            SELECT
+                id,
+                user_id,
+                kind,
+                actor_id,
+                target_kind,
+                target_id,
+                read_at,
+                created_at
+            FROM notifications
+            WHERE user_id = $1
+                AND (
+                    $2::timestamptz IS NULL
+                    OR (created_at, id) < ($2, $3)
+                )
+            ORDER BY created_at DESC, id DESC
+            LIMIT $4
+            "#,
+        )
+        .bind(user_id.as_uuid())
+        .bind(before.map(|cursor| cursor.created_at))
+        .bind(before.map(|cursor| cursor.id))
+        .bind(limit.clamp(1, 100))
+        .fetch_all(pool)
+        .await?;
+
+        rows.into_iter().map(Notification::try_from).collect()
+    }
+
+    pub async fn unread_count(pool: &PgPool, user_id: UserId) -> sqlx::Result<i64> {
+        sqlx::query_scalar(
+            r#"
+            SELECT count(*)::bigint
+            FROM notifications
+            WHERE user_id = $1 AND read_at IS NULL
+            "#,
+        )
+        .bind(user_id.as_uuid())
+        .fetch_one(pool)
+        .await
+    }
+
+    pub async fn mark_all_read(pool: &PgPool, user_id: UserId) -> sqlx::Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE notifications
+            SET read_at = COALESCE(read_at, now())
+            WHERE user_id = $1 AND read_at IS NULL
+            "#,
+        )
+        .bind(user_id.as_uuid())
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected())
     }
 }
