@@ -16,6 +16,8 @@ pub mod users {
         link: Option<String>,
         avatar_key: Option<String>,
         is_private: bool,
+        is_admin: bool,
+        suspended_at: Option<DateTime<Utc>>,
         email_verified_at: Option<DateTime<Utc>>,
         created_at: DateTime<Utc>,
     }
@@ -32,6 +34,8 @@ pub mod users {
                 row.link,
                 row.avatar_key,
                 row.is_private,
+                row.is_admin,
+                row.suspended_at,
                 row.email_verified_at,
                 row.created_at,
             )
@@ -62,6 +66,8 @@ pub mod users {
                 link,
                 avatar_key,
                 is_private,
+                is_admin,
+                suspended_at,
                 email_verified_at,
                 created_at
             "#,
@@ -127,6 +133,8 @@ pub mod users {
                 link,
                 avatar_key,
                 is_private,
+                is_admin,
+                suspended_at,
                 email_verified_at,
                 created_at
             "#,
@@ -158,6 +166,8 @@ pub mod users {
                 link,
                 avatar_key,
                 is_private,
+                is_admin,
+                suspended_at,
                 email_verified_at,
                 created_at
             "#,
@@ -197,6 +207,8 @@ pub mod users {
                 link,
                 avatar_key,
                 is_private,
+                is_admin,
+                suspended_at,
                 email_verified_at,
                 created_at
             "#,
@@ -233,12 +245,43 @@ pub mod users {
                 link,
                 avatar_key,
                 is_private,
+                is_admin,
+                suspended_at,
                 email_verified_at,
                 created_at
             "#,
         )
         .bind(id.as_uuid())
         .bind(avatar_key)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(User::from(row))
+    }
+
+    pub async fn suspend(pool: &PgPool, id: UserId) -> sqlx::Result<User> {
+        let row = sqlx::query_as::<_, UserRow>(
+            r#"
+            UPDATE users
+            SET suspended_at = COALESCE(suspended_at, now())
+            WHERE id = $1
+            RETURNING
+                id,
+                email,
+                handle,
+                password_hash,
+                display_name,
+                bio,
+                link,
+                avatar_key,
+                is_private,
+                is_admin,
+                suspended_at,
+                email_verified_at,
+                created_at
+            "#,
+        )
+        .bind(id.as_uuid())
         .fetch_one(pool)
         .await?;
 
@@ -256,6 +299,8 @@ pub mod users {
             link,
             avatar_key,
             is_private,
+            is_admin,
+            suspended_at,
             email_verified_at,
             created_at
         FROM users
@@ -273,6 +318,8 @@ pub mod users {
             link,
             avatar_key,
             is_private,
+            is_admin,
+            suspended_at,
             email_verified_at,
             created_at
         FROM users
@@ -290,6 +337,8 @@ pub mod users {
             link,
             avatar_key,
             is_private,
+            is_admin,
+            suspended_at,
             email_verified_at,
             created_at
         FROM users
@@ -1681,6 +1730,21 @@ pub mod posts {
         Ok(result.rows_affected() > 0)
     }
 
+    pub async fn admin_soft_delete(pool: &PgPool, id: Uuid) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE posts
+            SET deleted_at = COALESCE(deleted_at, now())
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     async fn hydrate(pool: &PgPool, row: PostRow) -> sqlx::Result<Post> {
         let media = sqlx::query_as::<_, PostMediaRow>(
             r#"
@@ -1812,6 +1876,18 @@ pub mod moderation {
         pub updated_at: DateTime<Utc>,
     }
 
+    #[derive(Debug, Clone)]
+    pub struct AuditLog {
+        pub id: Uuid,
+        pub admin_id: UserId,
+        pub report_id: Option<Uuid>,
+        pub action: String,
+        pub target_kind: String,
+        pub target_id: Uuid,
+        pub notes: Option<String>,
+        pub created_at: DateTime<Utc>,
+    }
+
     #[derive(Debug, FromRow)]
     struct BlockRow {
         blocker_id: Uuid,
@@ -1829,6 +1905,18 @@ pub mod moderation {
         status: String,
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct AuditLogRow {
+        id: Uuid,
+        admin_id: Uuid,
+        report_id: Option<Uuid>,
+        action: String,
+        target_kind: String,
+        target_id: Uuid,
+        notes: Option<String>,
+        created_at: DateTime<Utc>,
     }
 
     impl From<BlockRow> for Block {
@@ -1866,6 +1954,21 @@ pub mod moderation {
                 created_at: row.created_at,
                 updated_at: row.updated_at,
             })
+        }
+    }
+
+    impl From<AuditLogRow> for AuditLog {
+        fn from(row: AuditLogRow) -> Self {
+            Self {
+                id: row.id,
+                admin_id: UserId::from(row.admin_id),
+                report_id: row.report_id,
+                action: row.action,
+                target_kind: row.target_kind,
+                target_id: row.target_id,
+                notes: row.notes,
+                created_at: row.created_at,
+            }
         }
     }
 
@@ -1962,6 +2065,123 @@ pub mod moderation {
 
         Report::try_from(row)
     }
+
+    pub async fn list_reports_by_status(
+        pool: &PgPool,
+        status: &str,
+        limit: i64,
+    ) -> sqlx::Result<Vec<Report>> {
+        let rows = sqlx::query_as::<_, ReportRow>(
+            r#"
+            SELECT
+                id,
+                reporter_id,
+                target_kind,
+                target_id,
+                reason,
+                status,
+                created_at,
+                updated_at
+            FROM reports
+            WHERE status = $1
+            ORDER BY created_at ASC
+            LIMIT $2
+            "#,
+        )
+        .bind(status)
+        .bind(limit.clamp(1, 100))
+        .fetch_all(pool)
+        .await?;
+
+        rows.into_iter().map(Report::try_from).collect()
+    }
+
+    pub async fn find_report(pool: &PgPool, id: Uuid) -> sqlx::Result<Option<Report>> {
+        let row = sqlx::query_as::<_, ReportRow>(
+            r#"
+            SELECT
+                id,
+                reporter_id,
+                target_kind,
+                target_id,
+                reason,
+                status,
+                created_at,
+                updated_at
+            FROM reports
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(Report::try_from).transpose()
+    }
+
+    pub async fn update_report_status(
+        pool: &PgPool,
+        id: Uuid,
+        status: &str,
+    ) -> sqlx::Result<Report> {
+        let row = sqlx::query_as::<_, ReportRow>(
+            r#"
+            UPDATE reports
+            SET status = $2, updated_at = now()
+            WHERE id = $1
+            RETURNING
+                id,
+                reporter_id,
+                target_kind,
+                target_id,
+                reason,
+                status,
+                created_at,
+                updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(status)
+        .fetch_one(pool)
+        .await?;
+
+        Report::try_from(row)
+    }
+
+    pub async fn create_audit_log(
+        pool: &PgPool,
+        admin_id: UserId,
+        report_id: Option<Uuid>,
+        action: &str,
+        target_kind: &str,
+        target_id: Uuid,
+        notes: Option<&str>,
+    ) -> sqlx::Result<AuditLog> {
+        let row = sqlx::query_as::<_, AuditLogRow>(
+            r#"
+            INSERT INTO audit_logs (
+                admin_id,
+                report_id,
+                action,
+                target_kind,
+                target_id,
+                notes
+            )
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id, admin_id, report_id, action, target_kind, target_id, notes, created_at
+            "#,
+        )
+        .bind(admin_id.as_uuid())
+        .bind(report_id)
+        .bind(action.trim())
+        .bind(target_kind.trim())
+        .bind(target_id)
+        .bind(notes.map(str::trim).filter(|value| !value.is_empty()))
+        .fetch_one(pool)
+        .await?;
+
+        Ok(AuditLog::from(row))
+    }
 }
 
 pub mod comments {
@@ -2036,7 +2256,7 @@ pub mod comments {
                 r#"
                 SELECT parent_id IS NULL
                 FROM comments
-                WHERE id = $1 AND post_id = $2
+                WHERE id = $1 AND post_id = $2 AND deleted_at IS NULL
                 "#,
             )
             .bind(parent_id)
@@ -2108,6 +2328,7 @@ pub mod comments {
             FROM comments
             JOIN users ON users.id = comments.author_id
             WHERE comments.post_id = $1
+                AND comments.deleted_at IS NULL
             ORDER BY
                 COALESCE(comments.parent_id, comments.id) ASC,
                 comments.parent_id NULLS FIRST,
@@ -2130,6 +2351,21 @@ pub mod comments {
         )
         .bind(id)
         .bind(author_id.as_uuid())
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn admin_soft_delete(pool: &PgPool, id: Uuid) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE comments
+            SET deleted_at = COALESCE(deleted_at, now())
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
         .execute(pool)
         .await?;
 

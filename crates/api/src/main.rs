@@ -5,6 +5,7 @@ use zeroclaw_core::storage::ObjectStorage;
 use zeroclaw_core::{db, redis::RedisClient, Config, ServiceRole};
 
 mod auth;
+mod admin;
 mod comments;
 mod conversations;
 mod email;
