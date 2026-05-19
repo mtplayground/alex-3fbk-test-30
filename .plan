@@ -1,0 +1,61 @@
+ZeroClaw Architecture Plan
+
+Repository shape:
+- Cargo workspace at the repo root with Rust crates under crates/.
+- crates/api: Axum HTTP API, auth, REST resources, WebSocket gateway, migrations runner, shared application state.
+- crates/worker: background worker binary for media processing, queue polling, Postgres LISTEN/NOTIFY, object-storage IO.
+- crates/core: shared domain types, config loader, errors, auth/JWT helpers, storage abstractions, queue events, DTOs used by api and worker.
+- apps/web: React SPA bootstrapped with Vite, Tailwind, React Router, API client, WebSocket client, auth/session state, feature pages.
+- migrations: SQL migrations ordered by feature area and issue number.
+- scripts: local dev orchestration, seed data, deployment helpers.
+- tests: integration/e2e support where it does not naturally live beside crates or apps.
+
+Rust module organization:
+- api::http: router composition, middleware, extractors, response/error mapping, health.
+- api::auth: signup/login/refresh/logout, email verification, password reset, current-user.
+- api::users: profile read/update and public profile surfaces.
+- api::media: presigned upload endpoint, media asset reads, processing job creation.
+- api::social: posts, comments, likes, saves, follows, hashtags, mentions, block/report.
+- api::feeds: home feed, explore, full-text search, Redis cache integration.
+- api::stories and api::reels: short-lived media and vertical video APIs.
+- api::messaging: conversations, messages, notifications, REST history/list/read endpoints.
+- api::realtime: authenticated WebSocket gateway, Redis fan-out, typing/read/presence events.
+- worker::jobs: job acquisition, retries, status updates, notification dispatch.
+- worker::media: image transform and video/HLS processing handlers.
+- core::config/db/redis/storage/auth/time/ids: cross-crate infrastructure.
+
+Frontend organization:
+- apps/web/src/app: router, providers, layout, protected routes.
+- apps/web/src/api: typed API client, auth token refresh, upload helpers.
+- apps/web/src/features/auth: login/signup/verification/reset screens and session handling.
+- apps/web/src/features/profile: profile pages, edit screen, grid, follow modals.
+- apps/web/src/features/composer: post composer and uploader.
+- apps/web/src/features/feed: home feed, post cards, detail/comments.
+- apps/web/src/features/explore: search and explore views.
+- apps/web/src/features/stories and reels: rail/viewer/player.
+- apps/web/src/features/messages: inbox/thread and realtime hooks.
+- apps/web/src/features/notifications: drawer and unread badge.
+- apps/web/src/shared: UI primitives, forms, validation, utilities.
+
+Issue dependency order:
+- Foundation: #1 workspace, #2 config, #3 Postgres/migrations, #4 Redis, #5 S3, #6 API skeleton, #7 SPA bootstrap, #8 dev script.
+- Auth/account: #9 users schema/model, #10 password/JWT, #11 auth endpoints, #12 verification/reset, #13 middleware/extractor, #14 profile API, #15 auth UI, #16 profile UI.
+- Media pipeline: #17 media/job schema, #18 presigned upload, #19 worker dispatch, #20 image handler, #21 video/HLS handler, #22 uploader UI.
+- Social graph/content: #23 posts/tags/mentions schema, #24 post API, #25 comments, #26 likes/saves, #27 follows/private requests, #28 composer UI, #29 post detail, #30 profile grid/follow UI.
+- Discovery/feed: #31 feed query/cache depends on posts/follows/Redis, #32 search index depends on posts/users, #33 explore API, #34 feed UI, #35 explore/search UI.
+- Ephemeral/video surfaces: #36 stories schema/TTL, #37 story API, #38 story UI, #39 reels schema/API, #40 reels player UI.
+- Realtime/messaging/notifications: #41 WebSocket gateway depends on auth and Redis, #42 conversations/messages schema, #43 DM REST, #44 realtime DM events, #45 notifications schema/emission, #46 notification endpoints/badge, #47 WS client/hooks, #48 DM UI, #49 notifications UI.
+- Moderation/abuse/admin: #50 block/report schema/API, #51 admin review queue, #52 rate limiting/abuse middleware.
+- Quality/release: #53 unit tests, #54 Playwright E2E, #55 deployment runbook and seed data. Tests should be added throughout, with these issues consolidating coverage.
+
+Key design decisions:
+- Use sqlx with compile-time checked queries where practical and runtime migrations for local/deploy startup.
+- Keep core domain/request/response structs in crates/core when both API and worker need them; keep endpoint-only DTOs inside crates/api.
+- Prefer Postgres as the source of truth, Redis for cache/pub-sub/rate-limit state, and S3-compatible storage for original and derived media.
+- Model background work in Postgres for durability, using LISTEN/NOTIFY as a wake-up path rather than the only delivery mechanism.
+- Use short-lived access JWTs plus refresh tokens stored server-side for revocation/logout.
+- Keep auth, privacy, block/report, and rate-limit checks in API middleware/services rather than only in individual handlers.
+- Soft-delete user content where later moderation, notification, or audit flows need stable references.
+- Use cursor pagination for feeds, profile grids, comments, messages, and notifications.
+- Build the SPA as a normal Vite app that consumes the REST/WebSocket API; avoid coupling frontend build output into Rust crates until deployment requires it.
+- Keep local orchestration simple: Postgres, Redis, S3-compatible service, api, worker, and web processes with environment loaded from .env.
