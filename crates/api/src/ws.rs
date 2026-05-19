@@ -5,26 +5,43 @@ use axum::extract::{Query, State};
 use axum::http::header::{AUTHORIZATION, SEC_WEBSOCKET_PROTOCOL};
 use axum::http::HeaderMap;
 use axum::response::Response;
+use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
+use redis::AsyncCommands;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::time::{interval, MissedTickBehavior};
 use uuid::Uuid;
 use zeroclaw_core::auth as core_auth;
-use zeroclaw_core::models::UserId;
+use zeroclaw_core::models::{ConversationId, MessageId, UserId};
 use zeroclaw_core::redis::RedisChannel;
-use zeroclaw_core::repositories::users;
+use zeroclaw_core::repositories::{conversations, users};
 
 use crate::error::AppError;
 use crate::state::AppState;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+const PRESENCE_TTL_SECONDS: u64 = 75;
 const MAX_CONVERSATION_CHANNELS: usize = 100;
 
 #[derive(Debug, Deserialize)]
 pub struct WebSocketQuery {
     token: Option<String>,
     conversations: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ClientEvent {
+    Ping,
+    Typing {
+        conversation_id: Uuid,
+        is_typing: Option<bool>,
+    },
+    Read {
+        conversation_id: Uuid,
+        message_id: Uuid,
+    },
 }
 
 pub async fn websocket_handler(
@@ -36,9 +53,12 @@ pub async fn websocket_handler(
     let token = websocket_token(&headers, query.token.as_deref()).ok_or(AppError::Unauthorized)?;
     let user_id = authenticate_websocket(&state, token).await?;
     let conversation_ids = parse_conversation_ids(query.conversations.as_deref())?;
+    validate_conversation_subscriptions(&state, user_id, &conversation_ids).await?;
     let channels = subscription_channels(&state, user_id, &conversation_ids);
 
-    Ok(websocket.on_upgrade(move |socket| run_connection(socket, state, user_id, channels)))
+    Ok(websocket.on_upgrade(move |socket| {
+        run_connection(socket, state, user_id, conversation_ids, channels)
+    }))
 }
 
 async fn authenticate_websocket(state: &AppState, token: &str) -> Result<UserId, AppError> {
@@ -57,6 +77,7 @@ async fn run_connection(
     socket: WebSocket,
     state: AppState,
     user_id: UserId,
+    conversation_ids: Vec<Uuid>,
     channels: Vec<RedisChannel>,
 ) {
     let channel_names = channels
@@ -84,6 +105,8 @@ async fn run_connection(
         return;
     }
 
+    refresh_presence(&state, user_id).await;
+
     let mut heartbeat = interval(HEARTBEAT_INTERVAL);
     heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut redis_messages = pubsub.on_message();
@@ -91,6 +114,7 @@ async fn run_connection(
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
+                refresh_presence(&state, user_id).await;
                 let heartbeat_message = json!({
                     "type": "heartbeat",
                     "interval_ms": HEARTBEAT_INTERVAL.as_millis(),
@@ -124,7 +148,13 @@ async fn run_connection(
             socket_message = receiver.next() => {
                 match socket_message {
                     Some(Ok(Message::Text(text))) => {
-                        if handle_client_text(&mut sender, &text).await.is_err() {
+                        if handle_client_text(
+                            &state,
+                            &mut sender,
+                            user_id,
+                            &conversation_ids,
+                            &text,
+                        ).await.is_err() {
                             break;
                         }
                     }
@@ -141,21 +171,154 @@ async fn run_connection(
     }
 }
 
-async fn handle_client_text<S>(sender: &mut S, text: &str) -> Result<(), axum::Error>
+async fn handle_client_text<S>(
+    state: &AppState,
+    sender: &mut S,
+    user_id: UserId,
+    conversation_ids: &[Uuid],
+    text: &str,
+) -> Result<(), axum::Error>
 where
     S: futures_util::Sink<Message, Error = axum::Error> + Unpin,
 {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+    let Ok(event) = serde_json::from_str::<ClientEvent>(text) else {
         return Ok(());
     };
 
-    if value.get("type").and_then(serde_json::Value::as_str) == Some("ping") {
-        sender
-            .send(Message::Text(json!({ "type": "pong" }).to_string()))
-            .await?;
+    match event {
+        ClientEvent::Ping => {
+            sender
+                .send(Message::Text(json!({ "type": "pong" }).to_string()))
+                .await?;
+        }
+        ClientEvent::Typing {
+            conversation_id,
+            is_typing,
+        } => {
+            if !conversation_ids.contains(&conversation_id) {
+                send_client_error(sender, "conversation_not_subscribed").await?;
+                return Ok(());
+            }
+
+            let payload = json!({
+                "type": "typing",
+                "conversation_id": conversation_id,
+                "user_id": user_id,
+                "is_typing": is_typing.unwrap_or(true),
+            });
+            publish_conversation_event(state, ConversationId::from(conversation_id), payload).await;
+        }
+        ClientEvent::Read {
+            conversation_id,
+            message_id,
+        } => {
+            if !conversation_ids.contains(&conversation_id) {
+                send_client_error(sender, "conversation_not_subscribed").await?;
+                return Ok(());
+            }
+
+            match conversations::update_last_read(
+                state.db_pool(),
+                ConversationId::from(conversation_id),
+                user_id,
+                MessageId::from(message_id),
+            )
+            .await
+            {
+                Ok(_) => {
+                    let payload = json!({
+                        "type": "read",
+                        "conversation_id": conversation_id,
+                        "user_id": user_id,
+                        "message_id": message_id,
+                    });
+                    publish_conversation_event(state, ConversationId::from(conversation_id), payload)
+                        .await;
+                }
+                Err(error) => {
+                    tracing::debug!(%error, %user_id, %conversation_id, "failed to update websocket read receipt");
+                    send_client_error(sender, "read_failed").await?;
+                }
+            }
+        }
     }
 
     Ok(())
+}
+
+async fn send_client_error<S>(sender: &mut S, code: &'static str) -> Result<(), axum::Error>
+where
+    S: futures_util::Sink<Message, Error = axum::Error> + Unpin,
+{
+    sender
+        .send(Message::Text(json!({ "type": "error", "code": code }).to_string()))
+        .await
+}
+
+async fn validate_conversation_subscriptions(
+    state: &AppState,
+    user_id: UserId,
+    conversation_ids: &[Uuid],
+) -> Result<(), AppError> {
+    for conversation_id in conversation_ids {
+        let is_member = conversations::is_member(
+            state.db_pool(),
+            ConversationId::from(*conversation_id),
+            user_id,
+        )
+        .await?;
+        if !is_member {
+            return Err(AppError::NotFound);
+        }
+    }
+
+    Ok(())
+}
+
+async fn refresh_presence(state: &AppState, user_id: UserId) {
+    let key = state
+        .redis_namespace()
+        .key(["presence", "user", &user_id.to_string()]);
+    let payload = json!({
+        "user_id": user_id,
+        "status": "online",
+        "seen_at": Utc::now(),
+    })
+    .to_string();
+    let mut redis = state.redis_manager();
+
+    if let Err(error) = redis
+        .set_ex::<_, _, ()>(&key, payload, PRESENCE_TTL_SECONDS)
+        .await
+    {
+        tracing::warn!(%error, %user_id, "failed to refresh websocket presence");
+    }
+}
+
+async fn publish_conversation_event(
+    state: &AppState,
+    conversation_id: ConversationId,
+    payload: serde_json::Value,
+) {
+    let channel = state
+        .redis_namespace()
+        .channel(["conversation", &conversation_id.to_string()]);
+    let mut redis = state.redis_manager();
+
+    match serde_json::to_string(&payload) {
+        Ok(serialized) => {
+            if let Err(error) = state
+                .redis_client()
+                .publish(&mut redis, &channel, serialized)
+                .await
+            {
+                tracing::warn!(%error, %conversation_id, "failed to publish websocket event");
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, %conversation_id, "failed to serialize websocket event");
+        }
+    }
 }
 
 fn subscription_channels(

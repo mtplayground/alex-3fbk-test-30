@@ -5,6 +5,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use uuid::Uuid;
 use zeroclaw_core::models::{
     Conversation, ConversationId, ConversationKind, ConversationMember, CreateConversation,
@@ -67,7 +68,7 @@ pub struct ConversationsResponse {
     conversations: Vec<ConversationResponse>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct MessageResponse {
     id: String,
     conversation_id: String,
@@ -182,8 +183,10 @@ pub async fn create_message(
     let message = conversations::create_message(state.db_pool(), &input)
         .await
         .map_err(map_message_write_error)?;
+    let response = MessageResponse::from(message);
+    publish_message_event(&state, conversation_id, &response).await;
 
-    Ok((StatusCode::CREATED, Json(MessageResponse::from(message))))
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 pub async fn mark_conversation_read(
@@ -333,6 +336,36 @@ fn parse_message_cursor(cursor: Option<String>) -> Result<Option<DateTime<Utc>>,
                 .map_err(|_| AppError::BadRequest("cursor"))
         })
         .transpose()
+}
+
+async fn publish_message_event(
+    state: &AppState,
+    conversation_id: ConversationId,
+    message: &MessageResponse,
+) {
+    let channel = state
+        .redis_namespace()
+        .channel(["conversation", &conversation_id.to_string()]);
+    let payload = match serde_json::to_string(&json!({
+        "type": "message",
+        "conversation_id": conversation_id,
+        "message": message,
+    })) {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::warn!(%error, %conversation_id, "failed to serialize message event");
+            return;
+        }
+    };
+    let mut redis = state.redis_manager();
+
+    if let Err(error) = state
+        .redis_client()
+        .publish(&mut redis, &channel, payload)
+        .await
+    {
+        tracing::warn!(%error, %conversation_id, "failed to publish message event");
+    }
 }
 
 fn map_member_write_error(error: sqlx::Error) -> AppError {
