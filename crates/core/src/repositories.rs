@@ -2890,3 +2890,316 @@ pub mod stories {
             viewer_view.viewed_at
     "#;
 }
+
+pub mod reels {
+    use chrono::{DateTime, Utc};
+    use sqlx::{FromRow, PgPool};
+    use uuid::Uuid;
+
+    use crate::models::UserId;
+
+    #[derive(Debug, Clone)]
+    pub struct Reel {
+        pub id: Uuid,
+        pub author_id: UserId,
+        pub author_handle: String,
+        pub caption: String,
+        pub media: ReelMedia,
+        pub duration_ms: Option<i64>,
+        pub audio_title: Option<String>,
+        pub audio_artist: Option<String>,
+        pub audio_is_original: bool,
+        pub created_at: DateTime<Utc>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct ReelMedia {
+        pub media_id: Uuid,
+        pub kind: String,
+        pub status: String,
+        pub original_key: String,
+        pub variants: serde_json::Value,
+        pub width: Option<i32>,
+        pub height: Option<i32>,
+        pub duration_ms: Option<i64>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct FeedReel {
+        pub reel: Reel,
+        pub rank_score: f64,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct FeedCursor {
+        pub rank_score: f64,
+        pub created_at: DateTime<Utc>,
+        pub id: Uuid,
+    }
+
+    pub struct CreateReel {
+        pub author_id: UserId,
+        pub media_id: Uuid,
+        pub caption: String,
+        pub duration_ms: Option<i64>,
+        pub audio_title: Option<String>,
+        pub audio_artist: Option<String>,
+        pub audio_is_original: bool,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct ReelRow {
+        id: Uuid,
+        author_id: Uuid,
+        author_handle: String,
+        caption: String,
+        media_id: Uuid,
+        media_kind: String,
+        media_status: String,
+        original_key: String,
+        variants: sqlx::types::Json<serde_json::Value>,
+        width: Option<i32>,
+        height: Option<i32>,
+        media_duration_ms: Option<i64>,
+        duration_ms: Option<i64>,
+        audio_title: Option<String>,
+        audio_artist: Option<String>,
+        audio_is_original: bool,
+        created_at: DateTime<Utc>,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct FeedReelRow {
+        id: Uuid,
+        author_id: Uuid,
+        author_handle: String,
+        caption: String,
+        media_id: Uuid,
+        media_kind: String,
+        media_status: String,
+        original_key: String,
+        variants: sqlx::types::Json<serde_json::Value>,
+        width: Option<i32>,
+        height: Option<i32>,
+        media_duration_ms: Option<i64>,
+        duration_ms: Option<i64>,
+        audio_title: Option<String>,
+        audio_artist: Option<String>,
+        audio_is_original: bool,
+        created_at: DateTime<Utc>,
+        rank_score: f64,
+    }
+
+    impl From<ReelRow> for Reel {
+        fn from(row: ReelRow) -> Self {
+            Self {
+                id: row.id,
+                author_id: UserId::from(row.author_id),
+                author_handle: row.author_handle,
+                caption: row.caption,
+                media: ReelMedia {
+                    media_id: row.media_id,
+                    kind: row.media_kind,
+                    status: row.media_status,
+                    original_key: row.original_key,
+                    variants: row.variants.0,
+                    width: row.width,
+                    height: row.height,
+                    duration_ms: row.media_duration_ms,
+                },
+                duration_ms: row.duration_ms,
+                audio_title: row.audio_title,
+                audio_artist: row.audio_artist,
+                audio_is_original: row.audio_is_original,
+                created_at: row.created_at,
+            }
+        }
+    }
+
+    impl From<FeedReelRow> for FeedReel {
+        fn from(row: FeedReelRow) -> Self {
+            let rank_score = row.rank_score;
+            let reel = Reel::from(ReelRow {
+                id: row.id,
+                author_id: row.author_id,
+                author_handle: row.author_handle,
+                caption: row.caption,
+                media_id: row.media_id,
+                media_kind: row.media_kind,
+                media_status: row.media_status,
+                original_key: row.original_key,
+                variants: row.variants,
+                width: row.width,
+                height: row.height,
+                media_duration_ms: row.media_duration_ms,
+                duration_ms: row.duration_ms,
+                audio_title: row.audio_title,
+                audio_artist: row.audio_artist,
+                audio_is_original: row.audio_is_original,
+                created_at: row.created_at,
+            });
+
+            Self { reel, rank_score }
+        }
+    }
+
+    pub async fn create(pool: &PgPool, input: &CreateReel) -> sqlx::Result<Reel> {
+        let reel_id: Uuid = sqlx::query_scalar(
+            r#"
+            INSERT INTO reels (
+                author_id,
+                media_id,
+                caption,
+                duration_ms,
+                audio_title,
+                audio_artist,
+                audio_is_original
+            )
+            SELECT
+                $1,
+                media_assets.id,
+                $3,
+                COALESCE($4, media_assets.duration_ms),
+                $5,
+                $6,
+                $7
+            FROM media_assets
+            WHERE media_assets.id = $2
+                AND media_assets.owner_id = $1
+                AND media_assets.kind = 'video'
+                AND media_assets.status IN ('uploaded', 'processing', 'ready')
+            RETURNING id
+            "#,
+        )
+        .bind(input.author_id.as_uuid())
+        .bind(input.media_id)
+        .bind(input.caption.trim())
+        .bind(input.duration_ms)
+        .bind(input.audio_title.as_deref())
+        .bind(input.audio_artist.as_deref())
+        .bind(input.audio_is_original)
+        .fetch_one(pool)
+        .await?;
+
+        find_by_id(pool, reel_id)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)
+    }
+
+    pub async fn find_by_id(pool: &PgPool, id: Uuid) -> sqlx::Result<Option<Reel>> {
+        let row = sqlx::query_as::<_, ReelRow>(SELECT_REEL_SQL)
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+
+        Ok(row.map(Reel::from))
+    }
+
+    pub async fn list_feed(
+        pool: &PgPool,
+        viewer_id: UserId,
+        cursor: Option<FeedCursor>,
+        limit: i64,
+    ) -> sqlx::Result<Vec<FeedReel>> {
+        let rows = sqlx::query_as::<_, FeedReelRow>(
+            r#"
+            WITH ranked_reels AS (
+                SELECT
+                    reels.id,
+                    reels.author_id,
+                    users.handle AS author_handle,
+                    reels.caption,
+                    media_assets.id AS media_id,
+                    media_assets.kind AS media_kind,
+                    media_assets.status AS media_status,
+                    media_assets.original_key,
+                    media_assets.variants,
+                    media_assets.width,
+                    media_assets.height,
+                    media_assets.duration_ms AS media_duration_ms,
+                    reels.duration_ms,
+                    reels.audio_title,
+                    reels.audio_artist,
+                    reels.audio_is_original,
+                    reels.created_at,
+                    (
+                        EXTRACT(EPOCH FROM reels.created_at)
+                        + CASE WHEN follows.follower_id IS NULL THEN 0 ELSE 3600 END
+                    )::double precision AS rank_score
+                FROM reels
+                JOIN users ON users.id = reels.author_id
+                JOIN media_assets ON media_assets.id = reels.media_id
+                LEFT JOIN follows
+                    ON follows.follower_id = $1
+                    AND follows.followee_id = reels.author_id
+                    AND follows.state = 'accepted'
+                WHERE reels.deleted_at IS NULL
+                    AND media_assets.status IN ('uploaded', 'processing', 'ready')
+                    AND reels.created_at >= now() - interval '30 days'
+            )
+            SELECT
+                id,
+                author_id,
+                author_handle,
+                caption,
+                media_id,
+                media_kind,
+                media_status,
+                original_key,
+                variants,
+                width,
+                height,
+                media_duration_ms,
+                duration_ms,
+                audio_title,
+                audio_artist,
+                audio_is_original,
+                created_at,
+                rank_score
+            FROM ranked_reels
+            WHERE
+                $2::double precision IS NULL
+                OR rank_score < $2
+                OR (rank_score = $2 AND created_at < $3)
+                OR (rank_score = $2 AND created_at = $3 AND id < $4)
+            ORDER BY rank_score DESC, created_at DESC, id DESC
+            LIMIT $5
+            "#,
+        )
+        .bind(viewer_id.as_uuid())
+        .bind(cursor.map(|cursor| cursor.rank_score))
+        .bind(cursor.map(|cursor| cursor.created_at))
+        .bind(cursor.map(|cursor| cursor.id))
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows.into_iter().map(FeedReel::from).collect())
+    }
+
+    const SELECT_REEL_SQL: &str = r#"
+        SELECT
+            reels.id,
+            reels.author_id,
+            users.handle AS author_handle,
+            reels.caption,
+            media_assets.id AS media_id,
+            media_assets.kind AS media_kind,
+            media_assets.status AS media_status,
+            media_assets.original_key,
+            media_assets.variants,
+            media_assets.width,
+            media_assets.height,
+            media_assets.duration_ms AS media_duration_ms,
+            reels.duration_ms,
+            reels.audio_title,
+            reels.audio_artist,
+            reels.audio_is_original,
+            reels.created_at
+        FROM reels
+        JOIN users ON users.id = reels.author_id
+        JOIN media_assets ON media_assets.id = reels.media_id
+        WHERE reels.id = $1
+            AND reels.deleted_at IS NULL
+    "#;
+}

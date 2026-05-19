@@ -15,6 +15,7 @@ mod http;
 mod media;
 mod posts;
 mod profile;
+mod reels;
 mod search;
 mod social;
 mod state;
