@@ -41,6 +41,11 @@ export type PostResponse = {
   mentions: PostMention[];
 };
 
+export type PostsPageResponse = {
+  posts: PostResponse[];
+  next_cursor?: string | null;
+};
+
 export type CommentAuthor = {
   id: string;
   handle: string;
@@ -74,6 +79,15 @@ export function createPost(payload: CreatePostPayload) {
 
 export function getPost(id: string) {
   return apiRequest<PostResponse>(`/posts/${encodeURIComponent(id)}`);
+}
+
+export function getUserPosts(handle: string, cursor?: string | null) {
+  const params = new URLSearchParams({ limit: '24' });
+  if (cursor) {
+    params.set('cursor', cursor);
+  }
+
+  return apiRequest<PostsPageResponse>(`/users/${encodeURIComponent(handle)}/posts?${params.toString()}`);
 }
 
 export function getPostComments(postId: string) {

@@ -27,6 +27,26 @@ export type AvatarUploadResponse = {
   user: Profile;
 };
 
+export type FollowState = 'accepted' | 'pending' | 'none';
+
+export type FollowResponse = {
+  follower_id: string;
+  followee_id: string;
+  state: FollowState;
+};
+
+export type FollowUser = {
+  id: string;
+  handle: string;
+  display_name: string;
+  avatar_key?: string | null;
+  is_private: boolean;
+};
+
+export type FollowUsersResponse = {
+  users: FollowUser[];
+};
+
 export function getProfile(handle: string) {
   return apiRequest<Profile>(`/users/${encodeURIComponent(handle)}`);
 }
@@ -43,6 +63,26 @@ export function requestAvatarUpload(contentType: string) {
     method: 'POST',
     body: JSON.stringify({ content_type: contentType }),
   });
+}
+
+export function followUser(handle: string) {
+  return apiRequest<FollowResponse>(`/users/${encodeURIComponent(handle)}/follow`, {
+    method: 'POST',
+  });
+}
+
+export function unfollowUser(handle: string) {
+  return apiRequest<FollowResponse>(`/users/${encodeURIComponent(handle)}/follow`, {
+    method: 'DELETE',
+  });
+}
+
+export function getFollowers(handle: string) {
+  return apiRequest<FollowUsersResponse>(`/users/${encodeURIComponent(handle)}/followers`);
+}
+
+export function getFollowing(handle: string) {
+  return apiRequest<FollowUsersResponse>(`/users/${encodeURIComponent(handle)}/following`);
 }
 
 export async function uploadAvatarBlob(uploadUrl: string, blob: Blob) {
