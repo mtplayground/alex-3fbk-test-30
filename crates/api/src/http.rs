@@ -4,6 +4,10 @@ use tower_http::trace::TraceLayer;
 
 use crate::auth::{forgot_password, login, logout, refresh, reset_password, signup, verify_email};
 use crate::comments::{create_comment, delete_comment, get_post_comments};
+use crate::follows::{
+    accept_follow_request, follow_user, get_followers, get_following, reject_follow_request,
+    unfollow_user,
+};
 use crate::health::healthz;
 use crate::media::{complete_upload, create_upload};
 use crate::posts::{create_post, delete_post, get_post, get_user_posts};
@@ -35,6 +39,20 @@ pub fn router(state: AppState) -> Router {
         .route("/comments/:id/like", post(toggle_comment_like))
         .route("/users/:handle", get(get_user_profile))
         .route("/users/:handle/posts", get(get_user_posts))
+        .route(
+            "/users/:handle/follow",
+            post(follow_user).delete(unfollow_user),
+        )
+        .route("/users/:handle/followers", get(get_followers))
+        .route("/users/:handle/following", get(get_following))
+        .route(
+            "/follow-requests/:follower_id/accept",
+            post(accept_follow_request),
+        )
+        .route(
+            "/follow-requests/:follower_id/reject",
+            post(reject_follow_request),
+        )
         .route("/me", axum::routing::patch(update_me))
         .route("/me/avatar", post(create_avatar_upload))
         .layer(TraceLayer::new_for_http())
