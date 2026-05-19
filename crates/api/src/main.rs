@@ -14,6 +14,7 @@ mod follows;
 mod health;
 mod http;
 mod media;
+mod moderation;
 mod notifications;
 mod posts;
 mod profile;

@@ -1396,6 +1396,7 @@ pub mod posts {
     pub async fn list_by_author(
         pool: &PgPool,
         author_id: UserId,
+        viewer_id: Option<UserId>,
         before: Option<DateTime<Utc>>,
         limit: i64,
     ) -> sqlx::Result<Vec<Post>> {
@@ -1412,12 +1413,22 @@ pub mod posts {
             JOIN users ON users.id = posts.author_id
             WHERE posts.author_id = $1
                 AND posts.deleted_at IS NULL
-                AND ($2::timestamptz IS NULL OR posts.created_at < $2)
+                AND (
+                    $2::uuid IS NULL
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM blocks
+                        WHERE (blocks.blocker_id = $2 AND blocks.blocked_id = posts.author_id)
+                            OR (blocks.blocker_id = posts.author_id AND blocks.blocked_id = $2)
+                    )
+                )
+                AND ($3::timestamptz IS NULL OR posts.created_at < $3)
             ORDER BY posts.created_at DESC
-            LIMIT $3
+            LIMIT $4
             "#,
         )
         .bind(author_id.as_uuid())
+        .bind(viewer_id.map(|id| id.as_uuid()))
         .bind(before)
         .bind(limit)
         .fetch_all(pool)
@@ -1466,6 +1477,12 @@ pub mod posts {
                 LEFT JOIN saves ON saves.post_id = posts.id
                 WHERE posts.deleted_at IS NULL
                     AND posts.created_at >= now() - interval '7 days'
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM blocks
+                        WHERE (blocks.blocker_id = $1 AND blocks.blocked_id = posts.author_id)
+                            OR (blocks.blocker_id = posts.author_id AND blocks.blocked_id = $1)
+                    )
                 GROUP BY
                     posts.id,
                     posts.author_id,
@@ -1557,6 +1574,15 @@ pub mod posts {
                 WHERE posts.deleted_at IS NULL
                     AND posts.created_at >= now() - interval '30 days'
                     AND ($1::uuid IS NULL OR posts.author_id <> $1)
+                    AND (
+                        $1::uuid IS NULL
+                        OR NOT EXISTS (
+                            SELECT 1
+                            FROM blocks
+                            WHERE (blocks.blocker_id = $1 AND blocks.blocked_id = posts.author_id)
+                                OR (blocks.blocker_id = posts.author_id AND blocks.blocked_id = $1)
+                        )
+                    )
                     AND (
                         $1::uuid IS NULL
                         OR NOT EXISTS (
@@ -1719,6 +1745,222 @@ pub mod posts {
             hashtags,
             mentions,
         })
+    }
+}
+
+pub mod moderation {
+    use chrono::{DateTime, Utc};
+    use sqlx::{FromRow, PgPool};
+    use uuid::Uuid;
+
+    use crate::models::UserId;
+
+    #[derive(Debug, Clone)]
+    pub struct Block {
+        pub blocker_id: UserId,
+        pub blocked_id: UserId,
+        pub created_at: DateTime<Utc>,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum ReportTargetKind {
+        User,
+        Post,
+        Comment,
+        Message,
+        Conversation,
+        Story,
+        Reel,
+    }
+
+    impl ReportTargetKind {
+        pub const fn as_str(self) -> &'static str {
+            match self {
+                Self::User => "user",
+                Self::Post => "post",
+                Self::Comment => "comment",
+                Self::Message => "message",
+                Self::Conversation => "conversation",
+                Self::Story => "story",
+                Self::Reel => "reel",
+            }
+        }
+
+        pub fn from_str(value: &str) -> Option<Self> {
+            match value {
+                "user" => Some(Self::User),
+                "post" => Some(Self::Post),
+                "comment" => Some(Self::Comment),
+                "message" => Some(Self::Message),
+                "conversation" => Some(Self::Conversation),
+                "story" => Some(Self::Story),
+                "reel" => Some(Self::Reel),
+                _ => None,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct Report {
+        pub id: Uuid,
+        pub reporter_id: UserId,
+        pub target_kind: ReportTargetKind,
+        pub target_id: Uuid,
+        pub reason: String,
+        pub status: String,
+        pub created_at: DateTime<Utc>,
+        pub updated_at: DateTime<Utc>,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct BlockRow {
+        blocker_id: Uuid,
+        blocked_id: Uuid,
+        created_at: DateTime<Utc>,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct ReportRow {
+        id: Uuid,
+        reporter_id: Uuid,
+        target_kind: String,
+        target_id: Uuid,
+        reason: String,
+        status: String,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    }
+
+    impl From<BlockRow> for Block {
+        fn from(row: BlockRow) -> Self {
+            Self {
+                blocker_id: UserId::from(row.blocker_id),
+                blocked_id: UserId::from(row.blocked_id),
+                created_at: row.created_at,
+            }
+        }
+    }
+
+    impl TryFrom<ReportRow> for Report {
+        type Error = sqlx::Error;
+
+        fn try_from(row: ReportRow) -> Result<Self, Self::Error> {
+            let target_kind = ReportTargetKind::from_str(&row.target_kind).ok_or_else(|| {
+                sqlx::Error::ColumnDecode {
+                    index: "target_kind".to_owned(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("unknown report target kind {:?}", row.target_kind),
+                    )
+                    .into(),
+                }
+            })?;
+
+            Ok(Self {
+                id: row.id,
+                reporter_id: UserId::from(row.reporter_id),
+                target_kind,
+                target_id: row.target_id,
+                reason: row.reason,
+                status: row.status,
+                created_at: row.created_at,
+                updated_at: row.updated_at,
+            })
+        }
+    }
+
+    pub async fn block_user(
+        pool: &PgPool,
+        blocker_id: UserId,
+        blocked_id: UserId,
+    ) -> sqlx::Result<Block> {
+        let row = sqlx::query_as::<_, BlockRow>(
+            r#"
+            INSERT INTO blocks (blocker_id, blocked_id)
+            VALUES ($1, $2)
+            ON CONFLICT (blocker_id, blocked_id) DO UPDATE
+                SET created_at = blocks.created_at
+            RETURNING blocker_id, blocked_id, created_at
+            "#,
+        )
+        .bind(blocker_id.as_uuid())
+        .bind(blocked_id.as_uuid())
+        .fetch_one(pool)
+        .await?;
+
+        Ok(Block::from(row))
+    }
+
+    pub async fn unblock_user(
+        pool: &PgPool,
+        blocker_id: UserId,
+        blocked_id: UserId,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM blocks
+            WHERE blocker_id = $1 AND blocked_id = $2
+            "#,
+        )
+        .bind(blocker_id.as_uuid())
+        .bind(blocked_id.as_uuid())
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn is_blocked_between(
+        pool: &PgPool,
+        left_id: UserId,
+        right_id: UserId,
+    ) -> sqlx::Result<bool> {
+        sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM blocks
+                WHERE (blocker_id = $1 AND blocked_id = $2)
+                    OR (blocker_id = $2 AND blocked_id = $1)
+            )
+            "#,
+        )
+        .bind(left_id.as_uuid())
+        .bind(right_id.as_uuid())
+        .fetch_one(pool)
+        .await
+    }
+
+    pub async fn create_report(
+        pool: &PgPool,
+        reporter_id: UserId,
+        target_kind: ReportTargetKind,
+        target_id: Uuid,
+        reason: &str,
+    ) -> sqlx::Result<Report> {
+        let row = sqlx::query_as::<_, ReportRow>(
+            r#"
+            INSERT INTO reports (reporter_id, target_kind, target_id, reason)
+            VALUES ($1, $2, $3, $4)
+            RETURNING
+                id,
+                reporter_id,
+                target_kind,
+                target_id,
+                reason,
+                status,
+                created_at,
+                updated_at
+            "#,
+        )
+        .bind(reporter_id.as_uuid())
+        .bind(target_kind.as_str())
+        .bind(target_id)
+        .bind(reason.trim())
+        .fetch_one(pool)
+        .await?;
+
+        Report::try_from(row)
     }
 }
 
@@ -2383,6 +2625,7 @@ pub mod search {
     use uuid::Uuid;
 
     use super::posts::{self, Post};
+    use crate::models::UserId;
 
     #[derive(Debug, Clone)]
     pub struct UserSearchResult {
@@ -2442,13 +2685,14 @@ pub mod search {
 
     pub async fn users(
         pool: &PgPool,
+        viewer_id: Option<UserId>,
         query: &str,
         limit: i64,
     ) -> sqlx::Result<Vec<UserSearchResult>> {
         let rows = sqlx::query_as::<_, UserSearchRow>(
             r#"
             WITH search_query AS (
-                SELECT websearch_to_tsquery('simple', $1) AS query
+                SELECT websearch_to_tsquery('simple', $2) AS query
             )
             SELECT
                 users.id,
@@ -2458,17 +2702,29 @@ pub mod search {
                 users.is_private
             FROM users, search_query
             WHERE
-                users.search_vector @@ search_query.query
-                OR left(lower(users.handle), length(lower($1))) = lower($1)
-                OR similarity(users.handle, $1) > 0.2
+                (
+                    users.search_vector @@ search_query.query
+                    OR left(lower(users.handle), length(lower($2))) = lower($2)
+                    OR similarity(users.handle, $2) > 0.2
+                )
+                AND (
+                    $1::uuid IS NULL
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM blocks
+                        WHERE (blocks.blocker_id = $1 AND blocks.blocked_id = users.id)
+                            OR (blocks.blocker_id = users.id AND blocks.blocked_id = $1)
+                    )
+                )
             ORDER BY
-                CASE WHEN left(lower(users.handle), length(lower($1))) = lower($1) THEN 0 ELSE 1 END,
+                CASE WHEN left(lower(users.handle), length(lower($2))) = lower($2) THEN 0 ELSE 1 END,
                 ts_rank(users.search_vector, search_query.query) DESC,
-                similarity(users.handle, $1) DESC,
+                similarity(users.handle, $2) DESC,
                 users.handle ASC
-            LIMIT $2
+            LIMIT $3
             "#,
         )
+        .bind(viewer_id.map(|id| id.as_uuid()))
         .bind(query)
         .bind(limit)
         .fetch_all(pool)
@@ -2479,6 +2735,7 @@ pub mod search {
 
     pub async fn hashtags(
         pool: &PgPool,
+        viewer_id: Option<UserId>,
         query: &str,
         limit: i64,
     ) -> sqlx::Result<Vec<HashtagSearchResult>> {
@@ -2489,18 +2746,32 @@ pub mod search {
                 COUNT(post_hashtags.post_id)::bigint AS post_count
             FROM hashtags
             LEFT JOIN post_hashtags ON post_hashtags.hashtag_id = hashtags.id
+            LEFT JOIN posts ON posts.id = post_hashtags.post_id
             WHERE
-                left(lower(hashtags.name), length(lower($1))) = lower($1)
-                OR similarity(hashtags.name, $1) > 0.2
+                (
+                    left(lower(hashtags.name), length(lower($2))) = lower($2)
+                    OR similarity(hashtags.name, $2) > 0.2
+                )
+                AND (
+                    posts.id IS NULL
+                    OR $1::uuid IS NULL
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM blocks
+                        WHERE (blocks.blocker_id = $1 AND blocks.blocked_id = posts.author_id)
+                            OR (blocks.blocker_id = posts.author_id AND blocks.blocked_id = $1)
+                    )
+                )
             GROUP BY hashtags.id, hashtags.name
             ORDER BY
-                CASE WHEN left(lower(hashtags.name), length(lower($1))) = lower($1) THEN 0 ELSE 1 END,
-                similarity(hashtags.name, $1) DESC,
+                CASE WHEN left(lower(hashtags.name), length(lower($2))) = lower($2) THEN 0 ELSE 1 END,
+                similarity(hashtags.name, $2) DESC,
                 post_count DESC,
                 hashtags.name ASC
-            LIMIT $2
+            LIMIT $3
             "#,
         )
+        .bind(viewer_id.map(|id| id.as_uuid()))
         .bind(query)
         .bind(limit)
         .fetch_all(pool)
@@ -2509,22 +2780,37 @@ pub mod search {
         Ok(rows.into_iter().map(HashtagSearchResult::from).collect())
     }
 
-    pub async fn posts_matching(pool: &PgPool, query: &str, limit: i64) -> sqlx::Result<Vec<Post>> {
+    pub async fn posts_matching(
+        pool: &PgPool,
+        viewer_id: Option<UserId>,
+        query: &str,
+        limit: i64,
+    ) -> sqlx::Result<Vec<Post>> {
         let rows = sqlx::query_as::<_, PostSearchRow>(
             r#"
             WITH search_query AS (
-                SELECT websearch_to_tsquery('simple', $1) AS query
+                SELECT websearch_to_tsquery('simple', $2) AS query
             )
             SELECT posts.id
             FROM posts, search_query
             WHERE posts.deleted_at IS NULL
                 AND posts.search_vector @@ search_query.query
+                AND (
+                    $1::uuid IS NULL
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM blocks
+                        WHERE (blocks.blocker_id = $1 AND blocks.blocked_id = posts.author_id)
+                            OR (blocks.blocker_id = posts.author_id AND blocks.blocked_id = $1)
+                    )
+                )
             ORDER BY
                 ts_rank(posts.search_vector, search_query.query) DESC,
                 posts.created_at DESC
-            LIMIT $2
+            LIMIT $3
             "#,
         )
+        .bind(viewer_id.map(|id| id.as_uuid()))
         .bind(query)
         .bind(limit)
         .fetch_all(pool)

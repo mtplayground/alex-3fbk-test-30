@@ -6,10 +6,10 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zeroclaw_core::models::{UpdateUserProfile, User};
-use zeroclaw_core::repositories::users;
+use zeroclaw_core::repositories::{moderation, users};
 
 use crate::error::AppError;
-use crate::extractors::AuthUser;
+use crate::extractors::{AuthUser, OptionalAuthUser};
 use crate::state::AppState;
 
 const AVATAR_UPLOAD_EXPIRES_SECONDS: u64 = 15 * 60;
@@ -75,6 +75,7 @@ pub struct AvatarUploadResponse {
 
 pub async fn get_user_profile(
     State(state): State<AppState>,
+    OptionalAuthUser(auth_user): OptionalAuthUser,
     Path(handle): Path<String>,
 ) -> Result<Json<ProfileResponse>, AppError> {
     require_non_empty("handle", &handle)?;
@@ -82,6 +83,13 @@ pub async fn get_user_profile(
     let Some(user) = users::find_by_handle(state.db_pool(), &handle).await? else {
         return Err(AppError::NotFound);
     };
+    if let Some(auth_user) = auth_user {
+        if auth_user.id() != user.id()
+            && moderation::is_blocked_between(state.db_pool(), auth_user.id(), user.id()).await?
+        {
+            return Err(AppError::NotFound);
+        }
+    }
 
     Ok(Json(ProfileResponse::public(&user)))
 }
