@@ -25,6 +25,12 @@ PostgreSQL connection pool, runs embedded SQLx migrations from `migrations/`,
 and verifies connectivity with a `SELECT 1` health query during startup. The
 worker initializes the same pool and health check path.
 
+## Object Storage
+
+S3-compatible object storage access is centralized in `zeroclaw-core::storage`.
+The client is configured with the custom endpoint from `S3_ENDPOINT` and uses
+path-style addressing for local and S3-compatible providers.
+
 ## Runtime configuration
 
 Both binaries read configuration from environment variables. Copy

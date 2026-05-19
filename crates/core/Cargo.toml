@@ -11,6 +11,7 @@ name = "zeroclaw_core"
 path = "src/lib.rs"
 
 [dependencies]
+aws-sdk-s3.workspace = true
 redis.workspace = true
 serde.workspace = true
 sqlx.workspace = true
