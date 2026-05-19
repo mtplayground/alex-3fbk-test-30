@@ -12,6 +12,7 @@ use zeroclaw_core::repositories::{posts, users};
 
 use crate::error::AppError;
 use crate::extractors::{AuthUser, OptionalAuthUser};
+use crate::notifications;
 use crate::state::AppState;
 
 const DEFAULT_PAGE_LIMIT: i64 = 20;
@@ -103,6 +104,7 @@ pub async fn create_post(
     let post = posts::create(state.db_pool(), &input)
         .await
         .map_err(map_create_error)?;
+    notifications::emit_mentions(&state, auth_user.id(), post.id, &post.mentions).await;
 
     Ok((StatusCode::CREATED, Json(PostResponse::from(post))))
 }

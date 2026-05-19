@@ -8,6 +8,7 @@ use zeroclaw_core::repositories::social::{self, LikeTargetKind};
 
 use crate::error::AppError;
 use crate::extractors::AuthUser;
+use crate::notifications;
 use crate::state::AppState;
 
 const COUNT_CACHE_TTL_SECONDS: u64 = 60 * 10;
@@ -28,6 +29,9 @@ pub async fn toggle_post_like(
         .await
         .map_err(map_toggle_error)?;
     cache_like_count(&state, LikeTargetKind::Post, id, result.count).await?;
+    if result.active {
+        notifications::emit_like(&state, auth_user.id(), LikeTargetKind::Post, id).await;
+    }
 
     Ok(Json(ToggleCountResponse::from(result)))
 }
@@ -41,6 +45,9 @@ pub async fn toggle_comment_like(
         .await
         .map_err(map_toggle_error)?;
     cache_like_count(&state, LikeTargetKind::Comment, id, result.count).await?;
+    if result.active {
+        notifications::emit_like(&state, auth_user.id(), LikeTargetKind::Comment, id).await;
+    }
 
     Ok(Json(ToggleCountResponse::from(result)))
 }

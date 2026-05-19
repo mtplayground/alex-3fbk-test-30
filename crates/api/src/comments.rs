@@ -10,6 +10,7 @@ use zeroclaw_core::repositories::comments;
 
 use crate::error::AppError;
 use crate::extractors::AuthUser;
+use crate::notifications;
 use crate::state::AppState;
 
 const MAX_COMMENT_BODY_LENGTH: usize = 2_000;
@@ -59,6 +60,7 @@ pub async fn create_comment(
     let comment = comments::create(state.db_pool(), &input)
         .await
         .map_err(|error| map_comment_write_error(error, parent_id))?;
+    notifications::emit_comment(&state, auth_user.id(), comment.post_id, comment.id).await;
 
     Ok((StatusCode::CREATED, Json(CommentResponse::from(comment))))
 }
