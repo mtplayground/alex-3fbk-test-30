@@ -36,6 +36,7 @@ export const router = createBrowserRouter([
         element: <ProtectedRoute />,
         children: [
           { path: 'dm', element: <DirectMessagesPage /> },
+          { path: 'dm/:conversationId', element: <DirectMessagesPage /> },
           { path: 'settings/profile', element: <ProfileSettingsPage /> },
         ],
       },
