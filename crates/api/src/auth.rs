@@ -11,6 +11,7 @@ use zeroclaw_core::models::{
 };
 use zeroclaw_core::repositories::{auth_tokens, refresh_tokens, users};
 
+use crate::abuse;
 use crate::email::send_email;
 use crate::error::AppError;
 use crate::state::AppState;
@@ -131,8 +132,10 @@ pub async fn signup(
 
 pub async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> Result<(StatusCode, HeaderMap, Json<AuthResponse>), AppError> {
+    abuse::check_login_throttle(&state, &headers, &payload.email).await?;
     validate_login(&payload)?;
 
     let Some(user) = users::find_by_email(state.db_pool(), &payload.email).await? else {

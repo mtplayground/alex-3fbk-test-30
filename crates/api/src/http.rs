@@ -1,7 +1,10 @@
+use axum::extract::DefaultBodyLimit;
+use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
 use tower_http::trace::TraceLayer;
 
+use crate::abuse::rate_limit_write_requests;
 use crate::admin::{list_pending_reports, take_report_action};
 use crate::auth::{forgot_password, login, logout, refresh, reset_password, signup, verify_email};
 use crate::comments::{create_comment, delete_comment, get_post_comments};
@@ -26,6 +29,8 @@ use crate::social::{toggle_comment_like, toggle_post_like, toggle_post_save};
 use crate::state::AppState;
 use crate::stories::{create_story, get_stories_feed, get_story_viewers, view_story};
 use crate::ws::websocket_handler;
+
+const MAX_REQUEST_BODY_BYTES: usize = 512 * 1024 * 1024;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -97,6 +102,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/me", axum::routing::patch(update_me))
         .route("/me/avatar", post(create_avatar_upload))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            rate_limit_write_requests,
+        ))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

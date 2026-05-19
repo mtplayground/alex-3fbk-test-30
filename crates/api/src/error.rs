@@ -21,6 +21,9 @@ pub enum AppError {
     #[error("not found")]
     NotFound,
 
+    #[error("rate limit exceeded")]
+    RateLimited,
+
     #[error("configuration error: {0}")]
     Config(#[from] ConfigError),
 
@@ -62,6 +65,7 @@ impl AppError {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::NotFound => StatusCode::NOT_FOUND,
+            Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::Database(_) | Self::Migration(_) | Self::Redis(_) => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
@@ -82,6 +86,7 @@ impl AppError {
             Self::Unauthorized => "unauthorized",
             Self::Conflict(_) => "conflict",
             Self::NotFound => "not_found",
+            Self::RateLimited => "rate_limited",
             Self::Config(_) => "configuration_error",
             Self::Auth(_) => "authentication_error",
             Self::Email(_) => "email_error",
@@ -143,5 +148,13 @@ mod tests {
 
         assert_eq!(error.status_code(), StatusCode::UNAUTHORIZED);
         assert_eq!(error.code(), "unauthorized");
+    }
+
+    #[test]
+    fn rate_limited_errors_map_to_too_many_requests() {
+        let error = AppError::RateLimited;
+
+        assert_eq!(error.status_code(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(error.code(), "rate_limited");
     }
 }
