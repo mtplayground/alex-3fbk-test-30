@@ -17,11 +17,14 @@ use crate::extractors::AuthUser;
 use crate::state::AppState;
 
 const MEDIA_UPLOAD_EXPIRES_SECONDS: u64 = 15 * 60;
+const MAX_IMAGE_UPLOAD_BYTES: u64 = 15 * 1024 * 1024;
+const MAX_VIDEO_UPLOAD_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 pub struct CreateUploadRequest {
     kind: MediaKind,
     content_type: Option<String>,
+    size_bytes: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -48,6 +51,7 @@ pub async fn create_upload(
 ) -> Result<(StatusCode, Json<CreateUploadResponse>), AppError> {
     let content_type = normalize_content_type(payload.content_type);
     validate_content_type(payload.kind, content_type.as_deref())?;
+    validate_upload_size(payload.kind, payload.size_bytes)?;
 
     let extension = media_extension(payload.kind, content_type.as_deref());
     let key = format!(
@@ -120,9 +124,7 @@ fn normalize_content_type(value: Option<String>) -> Option<String> {
 }
 
 fn validate_content_type(kind: MediaKind, content_type: Option<&str>) -> Result<(), AppError> {
-    let Some(content_type) = content_type else {
-        return Ok(());
-    };
+    let content_type = content_type.ok_or(AppError::BadRequest("content_type"))?;
 
     let allowed = match kind {
         MediaKind::Image => matches!(
@@ -137,6 +139,25 @@ fn validate_content_type(kind: MediaKind, content_type: Option<&str>) -> Result<
 
     if !allowed {
         return Err(AppError::BadRequest("content_type"));
+    }
+
+    Ok(())
+}
+
+fn validate_upload_size(kind: MediaKind, size_bytes: Option<u64>) -> Result<(), AppError> {
+    let Some(size_bytes) = size_bytes else {
+        return Ok(());
+    };
+    if size_bytes == 0 {
+        return Err(AppError::BadRequest("size_bytes"));
+    }
+
+    let max_size = match kind {
+        MediaKind::Image => MAX_IMAGE_UPLOAD_BYTES,
+        MediaKind::Video => MAX_VIDEO_UPLOAD_BYTES,
+    };
+    if size_bytes > max_size {
+        return Err(AppError::BadRequest("size_bytes"));
     }
 
     Ok(())
@@ -184,6 +205,23 @@ mod tests {
         assert!(matches!(
             validate_content_type(MediaKind::Image, Some("video/mp4")),
             Err(AppError::BadRequest("content_type"))
+        ));
+        assert!(matches!(
+            validate_content_type(MediaKind::Image, None),
+            Err(AppError::BadRequest("content_type"))
+        ));
+    }
+
+    #[test]
+    fn upload_size_must_fit_media_kind() {
+        assert!(validate_upload_size(MediaKind::Image, Some(MAX_IMAGE_UPLOAD_BYTES)).is_ok());
+        assert!(matches!(
+            validate_upload_size(MediaKind::Image, Some(MAX_IMAGE_UPLOAD_BYTES + 1)),
+            Err(AppError::BadRequest("size_bytes"))
+        ));
+        assert!(matches!(
+            validate_upload_size(MediaKind::Video, Some(0)),
+            Err(AppError::BadRequest("size_bytes"))
         ));
     }
 }

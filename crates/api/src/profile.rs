@@ -13,6 +13,7 @@ use crate::extractors::{AuthUser, OptionalAuthUser};
 use crate::state::AppState;
 
 const AVATAR_UPLOAD_EXPIRES_SECONDS: u64 = 15 * 60;
+const MAX_AVATAR_UPLOAD_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Serialize)]
 pub struct ProfileResponse {
@@ -62,6 +63,7 @@ pub struct UpdateProfileRequest {
 #[derive(Debug, Deserialize)]
 pub struct AvatarUploadRequest {
     content_type: Option<String>,
+    size_bytes: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -112,10 +114,10 @@ pub async fn create_avatar_upload(
 ) -> Result<(StatusCode, Json<AvatarUploadResponse>), AppError> {
     let content_type = payload
         .content_type
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let extension = avatar_extension(content_type);
+        .map(|content_type| content_type.trim().to_ascii_lowercase())
+        .filter(|content_type| !content_type.is_empty());
+    validate_avatar_upload(content_type.as_deref(), payload.size_bytes)?;
+    let extension = avatar_extension(content_type.as_deref());
     let key = format!(
         "avatars/{}/{}.{}",
         auth_user.id(),
@@ -125,7 +127,7 @@ pub async fn create_avatar_upload(
     let expires_in = Duration::from_secs(AVATAR_UPLOAD_EXPIRES_SECONDS);
     let presigned = state
         .storage()
-        .presigned_put(&key, expires_in, content_type)
+        .presigned_put(&key, expires_in, content_type.as_deref())
         .await?;
     let user = users::update_avatar_key(state.db_pool(), auth_user.id(), &key).await?;
     let response = AvatarUploadResponse {
@@ -199,6 +201,28 @@ fn avatar_extension(content_type: Option<&str>) -> &'static str {
     }
 }
 
+fn validate_avatar_upload(
+    content_type: Option<&str>,
+    size_bytes: Option<u64>,
+) -> Result<(), AppError> {
+    let content_type = content_type.ok_or(AppError::BadRequest("content_type"))?;
+    let allowed = matches!(
+        content_type,
+        "image/jpeg" | "image/png" | "image/webp" | "image/gif"
+    );
+    if !allowed {
+        return Err(AppError::BadRequest("content_type"));
+    }
+
+    if let Some(size_bytes) = size_bytes {
+        if size_bytes == 0 || size_bytes > MAX_AVATAR_UPLOAD_BYTES {
+            return Err(AppError::BadRequest("size_bytes"));
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,6 +233,23 @@ mod tests {
         assert_eq!(avatar_extension(Some("image/webp")), "webp");
         assert_eq!(avatar_extension(Some("image/jpeg")), "jpg");
         assert_eq!(avatar_extension(None), "jpg");
+    }
+
+    #[test]
+    fn avatar_upload_requires_image_type_and_valid_size() {
+        assert!(validate_avatar_upload(Some("image/png"), Some(MAX_AVATAR_UPLOAD_BYTES)).is_ok());
+        assert!(matches!(
+            validate_avatar_upload(Some("video/mp4"), Some(1024)),
+            Err(AppError::BadRequest("content_type"))
+        ));
+        assert!(matches!(
+            validate_avatar_upload(None, Some(1024)),
+            Err(AppError::BadRequest("content_type"))
+        ));
+        assert!(matches!(
+            validate_avatar_upload(Some("image/png"), Some(MAX_AVATAR_UPLOAD_BYTES + 1)),
+            Err(AppError::BadRequest("size_bytes"))
+        ));
     }
 
     #[test]

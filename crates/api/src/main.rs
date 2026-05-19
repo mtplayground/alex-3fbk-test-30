@@ -4,8 +4,9 @@ use tracing_subscriber::EnvFilter;
 use zeroclaw_core::storage::ObjectStorage;
 use zeroclaw_core::{db, redis::RedisClient, Config, ServiceRole};
 
-mod auth;
+mod abuse;
 mod admin;
+mod auth;
 mod comments;
 mod conversations;
 mod email;
