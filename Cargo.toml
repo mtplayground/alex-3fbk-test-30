@@ -16,10 +16,11 @@ repository = "https://github.com/mtplayground/alex-3fbk-test-30"
 [workspace.dependencies]
 anyhow = "1.0"
 argon2 = "0.5"
-axum = "0.7"
+axum = { version = "0.7", features = ["ws"] }
 aws-sdk-s3 = { version = "=1.90.0", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio", "rustls"] }
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
+futures-util = "0.3"
 image = { version = "0.24", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 jsonwebtoken = { version = "9", default-features = false }
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "pool", "smtp-transport", "tokio1-rustls-tls"] }

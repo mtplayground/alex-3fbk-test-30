@@ -20,6 +20,7 @@ mod search;
 mod social;
 mod state;
 mod stories;
+mod ws;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -46,11 +47,13 @@ async fn run() -> Result<(), AppError> {
 
     let redis_client = RedisClient::new(&config)?;
     let redis_manager = redis_client.connection_manager().await?;
+    let redis_namespace = redis_client.namespace().clone();
 
     let state = AppState::new(
         pool,
         redis_manager,
-        redis_client.namespace().clone(),
+        redis_client,
+        redis_namespace,
         config.jwt().clone(),
         config.smtp().clone(),
         config.public_base_url().to_owned(),
