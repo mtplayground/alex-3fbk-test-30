@@ -8,6 +8,7 @@ const HOST_ENV: &str = "HOST";
 const JWT_SECRET_ENV: &str = "JWT_SECRET";
 const PORT_ENV: &str = "PORT";
 const PUBLIC_BASE_URL_ENV: &str = "PUBLIC_BASE_URL";
+const REDIS_KEY_PREFIX_ENV: &str = "REDIS_KEY_PREFIX";
 const REDIS_URL_ENV: &str = "REDIS_URL";
 const S3_ACCESS_KEY_ID_ENV: &str = "S3_ACCESS_KEY_ID";
 const S3_BUCKET_ENV: &str = "S3_BUCKET";
@@ -51,6 +52,7 @@ pub struct Config {
     port: u16,
     database_url: String,
     redis_url: String,
+    redis_key_prefix: String,
     s3: S3Config,
     jwt: JwtConfig,
     smtp: SmtpConfig,
@@ -74,6 +76,11 @@ impl Config {
             None => role.default_port(),
         };
 
+        let redis_key_prefix = match optional_env(REDIS_KEY_PREFIX_ENV)? {
+            Some(value) => value,
+            None => "zeroclaw".to_owned(),
+        };
+
         Ok(Self {
             service_name,
             role,
@@ -81,6 +88,7 @@ impl Config {
             port,
             database_url: required_url(DATABASE_URL_ENV)?,
             redis_url: required_url(REDIS_URL_ENV)?,
+            redis_key_prefix,
             s3: S3Config::from_env()?,
             jwt: JwtConfig::from_env()?,
             smtp: SmtpConfig::from_env()?,
@@ -110,6 +118,10 @@ impl Config {
 
     pub fn redis_url(&self) -> &str {
         &self.redis_url
+    }
+
+    pub fn redis_key_prefix(&self) -> &str {
+        &self.redis_key_prefix
     }
 
     pub const fn s3(&self) -> &S3Config {
@@ -143,6 +155,7 @@ impl fmt::Debug for Config {
             .field("port", &self.port)
             .field("database_url", &"<configured>")
             .field("redis_url", &"<configured>")
+            .field("redis_key_prefix", &self.redis_key_prefix)
             .field("s3", &self.s3)
             .field("jwt", &self.jwt)
             .field("smtp", &self.smtp)

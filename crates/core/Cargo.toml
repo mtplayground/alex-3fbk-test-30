@@ -11,6 +11,7 @@ name = "zeroclaw_core"
 path = "src/lib.rs"
 
 [dependencies]
+redis.workspace = true
 serde.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
