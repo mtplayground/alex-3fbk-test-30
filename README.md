@@ -18,6 +18,11 @@ workspace starts with two binaries and one shared library:
 cargo build
 ```
 
+## API
+
+The API binary starts an Axum server on `HOST:PORT` and exposes `GET /healthz`.
+Tracing is emitted as JSON through `tracing-subscriber`.
+
 ## Database
 
 Database access is centralized in `zeroclaw-core::db`. The API initializes a
