@@ -2260,3 +2260,166 @@ pub mod follows {
         Ok(rows.into_iter().map(FollowUser::from).collect())
     }
 }
+
+pub mod search {
+    use sqlx::{FromRow, PgPool};
+    use uuid::Uuid;
+
+    use super::posts::{self, Post};
+
+    #[derive(Debug, Clone)]
+    pub struct UserSearchResult {
+        pub id: Uuid,
+        pub handle: String,
+        pub display_name: String,
+        pub avatar_key: Option<String>,
+        pub is_private: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct HashtagSearchResult {
+        pub name: String,
+        pub post_count: i64,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct UserSearchRow {
+        id: Uuid,
+        handle: String,
+        display_name: String,
+        avatar_key: Option<String>,
+        is_private: bool,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct HashtagSearchRow {
+        name: String,
+        post_count: i64,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct PostSearchRow {
+        id: Uuid,
+    }
+
+    impl From<UserSearchRow> for UserSearchResult {
+        fn from(row: UserSearchRow) -> Self {
+            Self {
+                id: row.id,
+                handle: row.handle,
+                display_name: row.display_name,
+                avatar_key: row.avatar_key,
+                is_private: row.is_private,
+            }
+        }
+    }
+
+    impl From<HashtagSearchRow> for HashtagSearchResult {
+        fn from(row: HashtagSearchRow) -> Self {
+            Self {
+                name: row.name,
+                post_count: row.post_count,
+            }
+        }
+    }
+
+    pub async fn users(
+        pool: &PgPool,
+        query: &str,
+        limit: i64,
+    ) -> sqlx::Result<Vec<UserSearchResult>> {
+        let rows = sqlx::query_as::<_, UserSearchRow>(
+            r#"
+            WITH search_query AS (
+                SELECT websearch_to_tsquery('simple', $1) AS query
+            )
+            SELECT
+                users.id,
+                users.handle,
+                users.display_name,
+                users.avatar_key,
+                users.is_private
+            FROM users, search_query
+            WHERE
+                users.search_vector @@ search_query.query
+                OR left(lower(users.handle), length(lower($1))) = lower($1)
+                OR similarity(users.handle, $1) > 0.2
+            ORDER BY
+                CASE WHEN left(lower(users.handle), length(lower($1))) = lower($1) THEN 0 ELSE 1 END,
+                ts_rank(users.search_vector, search_query.query) DESC,
+                similarity(users.handle, $1) DESC,
+                users.handle ASC
+            LIMIT $2
+            "#,
+        )
+        .bind(query)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows.into_iter().map(UserSearchResult::from).collect())
+    }
+
+    pub async fn hashtags(
+        pool: &PgPool,
+        query: &str,
+        limit: i64,
+    ) -> sqlx::Result<Vec<HashtagSearchResult>> {
+        let rows = sqlx::query_as::<_, HashtagSearchRow>(
+            r#"
+            SELECT
+                hashtags.name,
+                COUNT(post_hashtags.post_id)::bigint AS post_count
+            FROM hashtags
+            LEFT JOIN post_hashtags ON post_hashtags.hashtag_id = hashtags.id
+            WHERE
+                left(lower(hashtags.name), length(lower($1))) = lower($1)
+                OR similarity(hashtags.name, $1) > 0.2
+            GROUP BY hashtags.id, hashtags.name
+            ORDER BY
+                CASE WHEN left(lower(hashtags.name), length(lower($1))) = lower($1) THEN 0 ELSE 1 END,
+                similarity(hashtags.name, $1) DESC,
+                post_count DESC,
+                hashtags.name ASC
+            LIMIT $2
+            "#,
+        )
+        .bind(query)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows.into_iter().map(HashtagSearchResult::from).collect())
+    }
+
+    pub async fn posts_matching(pool: &PgPool, query: &str, limit: i64) -> sqlx::Result<Vec<Post>> {
+        let rows = sqlx::query_as::<_, PostSearchRow>(
+            r#"
+            WITH search_query AS (
+                SELECT websearch_to_tsquery('simple', $1) AS query
+            )
+            SELECT posts.id
+            FROM posts, search_query
+            WHERE posts.deleted_at IS NULL
+                AND posts.search_vector @@ search_query.query
+            ORDER BY
+                ts_rank(posts.search_vector, search_query.query) DESC,
+                posts.created_at DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(query)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+
+        let mut posts = Vec::with_capacity(rows.len());
+        for row in rows {
+            if let Some(post) = posts::find_by_id(pool, row.id).await? {
+                posts.push(post);
+            }
+        }
+
+        Ok(posts)
+    }
+}
