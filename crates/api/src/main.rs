@@ -10,6 +10,7 @@ mod error;
 pub mod extractors;
 mod health;
 mod http;
+mod media;
 mod profile;
 mod state;
 
