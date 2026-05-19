@@ -12,15 +12,18 @@ use image::GenericImageView;
 use serde_json::{json, Map, Value};
 use sqlx::postgres::PgListener;
 use sqlx::PgPool;
+use tokio::time::MissedTickBehavior;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 use zeroclaw_core::models::{MediaAsset, MediaAssetStatus, MediaJob, MediaJobKind, MediaKind};
-use zeroclaw_core::repositories::media;
+use zeroclaw_core::repositories::{media, stories};
 use zeroclaw_core::storage::ObjectStorage;
 use zeroclaw_core::{db, Config, ServiceRole};
 
 const MEDIA_JOBS_CHANNEL: &str = "media_jobs";
 const IDLE_POLL_INTERVAL: StdDuration = StdDuration::from_secs(10);
+const STORY_CLEANUP_INTERVAL: StdDuration = StdDuration::from_secs(60 * 60);
+const STORY_AUDIT_RETENTION: ChronoDuration = ChronoDuration::days(7);
 const MAX_JOBS_PER_WAKE: usize = 25;
 const IMAGE_VARIANTS: [ImageVariantSpec; 3] = [
     ImageVariantSpec {
@@ -96,6 +99,8 @@ impl Worker {
     async fn run(mut self) -> Result<()> {
         let shutdown = tokio::signal::ctrl_c();
         tokio::pin!(shutdown);
+        let mut story_cleanup_interval = tokio::time::interval(STORY_CLEANUP_INTERVAL);
+        story_cleanup_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         loop {
             self.drain_available_jobs().await?;
@@ -111,6 +116,11 @@ impl Worker {
                 }
                 _ = tokio::time::sleep(IDLE_POLL_INTERVAL) => {
                     tracing::debug!("polling media job queue");
+                }
+                _ = story_cleanup_interval.tick() => {
+                    if let Err(error) = cleanup_expired_stories(&self.pool).await {
+                        tracing::warn!(error = %error, "expired story cleanup failed");
+                    }
                 }
                 _ = &mut shutdown => {
                     tracing::info!("worker shutdown signal received");
@@ -173,6 +183,21 @@ impl Worker {
 
         Ok(())
     }
+}
+
+async fn cleanup_expired_stories(pool: &PgPool) -> Result<u64> {
+    let cutoff = story_cleanup_cutoff(Utc::now());
+    let deleted = stories::delete_expired_before(pool, cutoff).await?;
+
+    if deleted > 0 {
+        tracing::info!(deleted, cutoff = %cutoff, "removed expired story rows");
+    }
+
+    Ok(deleted)
+}
+
+fn story_cleanup_cutoff(now: chrono::DateTime<Utc>) -> chrono::DateTime<Utc> {
+    now - STORY_AUDIT_RETENTION
 }
 
 async fn dispatch_job(pool: &PgPool, storage: &ObjectStorage, job: &MediaJob) -> Result<()> {

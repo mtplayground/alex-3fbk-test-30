@@ -2540,3 +2540,25 @@ pub mod search {
         Ok(posts)
     }
 }
+
+pub mod stories {
+    use chrono::{DateTime, Utc};
+    use sqlx::PgPool;
+
+    pub async fn delete_expired_before(
+        pool: &PgPool,
+        cutoff: DateTime<Utc>,
+    ) -> sqlx::Result<u64> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM stories
+            WHERE expires_at < $1
+            "#,
+        )
+        .bind(cutoff)
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+}
