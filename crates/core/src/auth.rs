@@ -115,6 +115,11 @@ impl JwtClaims {
         self.exp
     }
 
+    pub fn expires_at(&self) -> Result<DateTime<Utc>> {
+        let timestamp = i64::try_from(self.exp).map_err(|_| AuthError::TimestampOutOfRange)?;
+        DateTime::from_timestamp(timestamp, 0).ok_or(AuthError::TimestampOutOfRange)
+    }
+
     pub const fn issued_at_timestamp(&self) -> usize {
         self.iat
     }

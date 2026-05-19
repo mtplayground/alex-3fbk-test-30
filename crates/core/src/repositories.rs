@@ -228,6 +228,59 @@ pub mod refresh_tokens {
         Ok(RefreshToken::from(row))
     }
 
+    pub async fn rotate(
+        pool: &PgPool,
+        current_id: RefreshTokenId,
+        input: &CreateRefreshToken,
+    ) -> sqlx::Result<RefreshToken> {
+        let mut transaction = pool.begin().await?;
+
+        let replacement = sqlx::query_as::<_, RefreshTokenRow>(
+            r#"
+            INSERT INTO refresh_tokens (
+                user_id,
+                token_jti,
+                rotated_from_token_id,
+                expires_at
+            )
+            VALUES ($1, $2, $3, $4)
+            RETURNING
+                id,
+                user_id,
+                token_jti,
+                rotated_from_token_id,
+                replaced_by_token_id,
+                revoked_at,
+                expires_at,
+                created_at
+            "#,
+        )
+        .bind(input.user_id().as_uuid())
+        .bind(input.token_jti())
+        .bind(input.rotated_from_token_id().map(RefreshTokenId::as_uuid))
+        .bind(input.expires_at())
+        .fetch_one(&mut *transaction)
+        .await?;
+
+        sqlx::query(
+            r#"
+            UPDATE refresh_tokens
+            SET
+                replaced_by_token_id = $2,
+                revoked_at = COALESCE(revoked_at, now())
+            WHERE id = $1
+            "#,
+        )
+        .bind(current_id.as_uuid())
+        .bind(replacement.id)
+        .execute(&mut *transaction)
+        .await?;
+
+        transaction.commit().await?;
+
+        Ok(RefreshToken::from(replacement))
+    }
+
     pub async fn find_by_jti(pool: &PgPool, token_jti: Uuid) -> sqlx::Result<Option<RefreshToken>> {
         let row = sqlx::query_as::<_, RefreshTokenRow>(SELECT_REFRESH_TOKEN_SQL_WITH_JTI)
             .bind(token_jti)
