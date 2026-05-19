@@ -8,6 +8,7 @@ import { ForgotPasswordPage } from '../routes/ForgotPasswordPage';
 import { HomePage } from '../routes/HomePage';
 import { LoginPage } from '../routes/LoginPage';
 import { NotFoundPage } from '../routes/NotFoundPage';
+import { NotificationsPage } from '../routes/NotificationsPage';
 import { PostPage } from '../routes/PostPage';
 import { ProfilePage } from '../routes/ProfilePage';
 import { ProfileSettingsPage } from '../routes/ProfileSettingsPage';
@@ -37,6 +38,7 @@ export const router = createBrowserRouter([
         children: [
           { path: 'dm', element: <DirectMessagesPage /> },
           { path: 'dm/:conversationId', element: <DirectMessagesPage /> },
+          { path: 'notifications', element: <NotificationsPage /> },
           { path: 'settings/profile', element: <ProfileSettingsPage /> },
         ],
       },

@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom';
 
 import { useAuth } from '../../features/auth/AuthProvider';
+import { NotificationsDrawer } from '../../features/notifications/NotificationsDrawer';
 
 export function RootLayout() {
   const auth = useAuth();
@@ -39,15 +40,18 @@ export function RootLayout() {
             ))}
           </nav>
           {auth.isAuthenticated ? (
-            <button
-              type="button"
-              onClick={() => {
-                void auth.logout();
-              }}
-              className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-800 hover:border-slate-950 hover:text-slate-950"
-            >
-              Sign out
-            </button>
+            <div className="flex items-center gap-2">
+              <NotificationsDrawer />
+              <button
+                type="button"
+                onClick={() => {
+                  void auth.logout();
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-800 hover:border-slate-950 hover:text-slate-950"
+              >
+                Sign out
+              </button>
+            </div>
           ) : (
             <NavLink
               to="/login"
