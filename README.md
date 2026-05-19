@@ -80,6 +80,12 @@ access token and the same `conversations` parameter, using exponential backoff
 capped at 10 seconds. Clients may send `{"type":"ping"}` and will receive
 `{"type":"pong"}`.
 
+DM message creation publishes a `message` event to the conversation channel.
+Connected clients may send `typing` and `read` events over the WebSocket with a
+`conversation_id`; `read` also carries `message_id`. The socket only accepts
+events for conversations requested at connect time. Online presence is stored in
+Redis at `presence:user:{user_id}` with a TTL refreshed by the heartbeat loop.
+
 ## Database
 
 Database access is centralized in `zeroclaw-core::db`. The API initializes a
