@@ -4,8 +4,10 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use chrono::{DateTime, Utc};
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use zeroclaw_core::models::UserId;
 use zeroclaw_core::repositories::{posts, users};
 
 use crate::error::AppError;
@@ -15,6 +17,7 @@ use crate::state::AppState;
 const DEFAULT_PAGE_LIMIT: i64 = 20;
 const MAX_PAGE_LIMIT: i64 = 50;
 const MAX_POST_MEDIA: usize = 10;
+const FEED_CACHE_TTL_SECONDS: u64 = 30;
 
 #[derive(Debug, Deserialize)]
 pub struct CreatePostRequest {
@@ -29,7 +32,7 @@ pub struct PostsQuery {
     limit: Option<i64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PostResponse {
     id: String,
     author: PostAuthorResponse,
@@ -41,13 +44,13 @@ pub struct PostResponse {
     mentions: Vec<PostMentionResponse>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PostAuthorResponse {
     id: String,
     handle: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PostMediaResponse {
     media_id: String,
     position: i32,
@@ -59,14 +62,14 @@ pub struct PostMediaResponse {
     duration_ms: Option<i64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PostMentionResponse {
     user_id: String,
     handle: String,
     position: i32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PostsPageResponse {
     posts: Vec<PostResponse>,
     next_cursor: Option<String>,
@@ -147,6 +150,49 @@ pub async fn get_user_posts(
         posts: page_posts.into_iter().map(PostResponse::from).collect(),
         next_cursor,
     }))
+}
+
+pub async fn get_feed(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Query(query): Query<PostsQuery>,
+) -> Result<Json<PostsPageResponse>, AppError> {
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_PAGE_LIMIT)
+        .clamp(1, MAX_PAGE_LIMIT);
+    let cache_key = feed_cache_key(&state, auth_user.id(), query.cursor.as_deref(), limit);
+    let mut redis = state.redis_manager();
+
+    if let Some(cached) = redis.get::<_, Option<String>>(&cache_key).await? {
+        if let Ok(response) = serde_json::from_str::<PostsPageResponse>(&cached) {
+            return Ok(Json(response));
+        }
+    }
+
+    let cursor = parse_feed_cursor(query.cursor)?;
+    let feed_posts = posts::list_home_feed(state.db_pool(), auth_user.id(), cursor, limit + 1).await?;
+    let has_next = feed_posts.len() > limit as usize;
+    let page_posts: Vec<_> = feed_posts.into_iter().take(limit as usize).collect();
+    let next_cursor = if has_next {
+        page_posts.last().map(feed_cursor)
+    } else {
+        None
+    };
+    let response = PostsPageResponse {
+        posts: page_posts
+            .into_iter()
+            .map(|feed_post| PostResponse::from(feed_post.post))
+            .collect(),
+        next_cursor,
+    };
+    let serialized = serde_json::to_string(&response)
+        .map_err(|error| AppError::Internal(format!("feed cache serialization failed: {error}")))?;
+    redis
+        .set_ex::<_, _, ()>(&cache_key, serialized, FEED_CACHE_TTL_SECONDS)
+        .await?;
+
+    Ok(Json(response))
 }
 
 impl From<posts::Post> for PostResponse {
@@ -294,6 +340,64 @@ fn parse_cursor(cursor: Option<String>) -> Result<Option<DateTime<Utc>>, AppErro
     Ok(Some(parsed.with_timezone(&Utc)))
 }
 
+fn parse_feed_cursor(cursor: Option<String>) -> Result<Option<posts::FeedCursor>, AppError> {
+    let Some(cursor) = cursor else {
+        return Ok(None);
+    };
+    let cursor = cursor.trim();
+    if cursor.is_empty() {
+        return Ok(None);
+    }
+
+    let mut parts = cursor.split('|');
+    let Some(rank_score) = parts.next() else {
+        return Err(AppError::BadRequest("cursor"));
+    };
+    let Some(created_at) = parts.next() else {
+        return Err(AppError::BadRequest("cursor"));
+    };
+    let Some(id) = parts.next() else {
+        return Err(AppError::BadRequest("cursor"));
+    };
+    if parts.next().is_some() {
+        return Err(AppError::BadRequest("cursor"));
+    }
+
+    let rank_score = rank_score
+        .parse::<f64>()
+        .map_err(|_| AppError::BadRequest("cursor"))?;
+    if !rank_score.is_finite() {
+        return Err(AppError::BadRequest("cursor"));
+    }
+    let created_at =
+        DateTime::parse_from_rfc3339(created_at).map_err(|_| AppError::BadRequest("cursor"))?;
+    let id = Uuid::parse_str(id).map_err(|_| AppError::BadRequest("cursor"))?;
+
+    Ok(Some(posts::FeedCursor {
+        rank_score,
+        created_at: created_at.with_timezone(&Utc),
+        id,
+    }))
+}
+
+fn feed_cursor(feed_post: &posts::FeedPost) -> String {
+    format!(
+        "{}|{}|{}",
+        feed_post.rank_score,
+        feed_post.post.created_at.to_rfc3339(),
+        feed_post.post.id
+    )
+}
+
+fn feed_cache_key(state: &AppState, user_id: UserId, cursor: Option<&str>, limit: i64) -> String {
+    state.redis_namespace().key([
+        "feed".to_owned(),
+        user_id.to_string(),
+        cursor.unwrap_or("first").to_owned(),
+        limit.to_string(),
+    ])
+}
+
 fn map_create_error(error: sqlx::Error) -> AppError {
     match error {
         sqlx::Error::RowNotFound => AppError::BadRequest("media_ids"),
@@ -319,6 +423,17 @@ mod tests {
     fn cursor_parser_rejects_invalid_dates() {
         assert!(matches!(
             parse_cursor(Some("not-a-date".to_owned())),
+            Err(AppError::BadRequest("cursor"))
+        ));
+    }
+
+    #[test]
+    fn feed_cursor_parser_rejects_bad_rank_score() {
+        assert!(matches!(
+            parse_feed_cursor(Some(
+                "nan|2026-01-01T00:00:00Z|00000000-0000-0000-0000-000000000000"
+                    .to_owned()
+            )),
             Err(AppError::BadRequest("cursor"))
         ));
     }
