@@ -2,10 +2,11 @@ use std::process::ExitCode;
 
 use anyhow::{anyhow, Result};
 use tracing_subscriber::EnvFilter;
-use zeroclaw_core::{Config, ServiceRole};
+use zeroclaw_core::{db, Config, ServiceRole};
 
-fn main() -> ExitCode {
-    match run() {
+#[tokio::main]
+async fn main() -> ExitCode {
+    match run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("api failed to start: {error}");
@@ -14,17 +15,21 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> Result<()> {
+async fn run() -> Result<()> {
     init_tracing()?;
 
     let config = Config::from_env(ServiceRole::Api)?;
+    let pool = db::create_pool(&config).await?;
+
+    db::run_migrations(&pool).await?;
+    db::health_check(&pool).await?;
 
     tracing::info!(
         service = config.service_name(),
         role = ?config.role(),
         bind_address = %config.bind_address(),
         public_base_url = %config.public_base_url(),
-        "api crate initialized"
+        "api database pool initialized"
     );
 
     Ok(())

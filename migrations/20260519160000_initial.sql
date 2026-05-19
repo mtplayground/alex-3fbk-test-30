@@ -1,0 +1,1 @@
+-- Initial empty migration for sqlx migration wiring.

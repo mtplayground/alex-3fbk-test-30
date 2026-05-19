@@ -18,6 +18,13 @@ workspace starts with two binaries and one shared library:
 cargo build
 ```
 
+## Database
+
+Database access is centralized in `zeroclaw-core::db`. The API initializes a
+PostgreSQL connection pool, runs embedded SQLx migrations from `migrations/`,
+and verifies connectivity with a `SELECT 1` health query during startup. The
+worker initializes the same pool and health check path.
+
 ## Runtime configuration
 
 Both binaries read configuration from environment variables. Copy
