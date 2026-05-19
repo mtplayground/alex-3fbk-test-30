@@ -131,6 +131,56 @@ impl fmt::Display for MediaJobId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ConversationId(Uuid);
+
+impl ConversationId {
+    pub fn new(value: Uuid) -> Self {
+        Self(value)
+    }
+
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+}
+
+impl From<Uuid> for ConversationId {
+    fn from(value: Uuid) -> Self {
+        Self::new(value)
+    }
+}
+
+impl fmt::Display for ConversationId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct MessageId(Uuid);
+
+impl MessageId {
+    pub fn new(value: Uuid) -> Self {
+        Self(value)
+    }
+
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+}
+
+impl From<Uuid> for MessageId {
+    fn from(value: Uuid) -> Self {
+        Self::new(value)
+    }
+}
+
+impl fmt::Display for MessageId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthTokenPurpose {
     EmailVerification,
@@ -260,6 +310,30 @@ impl MediaJobStatus {
             "running" => Some(Self::Running),
             "succeeded" => Some(Self::Succeeded),
             "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationKind {
+    Dm,
+    Group,
+}
+
+impl ConversationKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Dm => "dm",
+            Self::Group => "group",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "dm" => Some(Self::Dm),
+            "group" => Some(Self::Group),
             _ => None,
         }
     }
@@ -968,6 +1042,212 @@ impl CreateMediaJob {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Conversation {
+    id: ConversationId,
+    kind: ConversationKind,
+    title: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl Conversation {
+    pub fn new(
+        id: ConversationId,
+        kind: ConversationKind,
+        title: Option<String>,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            id,
+            kind,
+            title,
+            created_at,
+            updated_at,
+        }
+    }
+
+    pub const fn id(&self) -> ConversationId {
+        self.id
+    }
+
+    pub const fn kind(&self) -> ConversationKind {
+        self.kind
+    }
+
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+
+    pub const fn created_at(&self) -> &DateTime<Utc> {
+        &self.created_at
+    }
+
+    pub const fn updated_at(&self) -> &DateTime<Utc> {
+        &self.updated_at
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateConversation {
+    kind: ConversationKind,
+    title: Option<String>,
+}
+
+impl CreateConversation {
+    pub const fn new(kind: ConversationKind) -> Self {
+        Self { kind, title: None }
+    }
+
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    pub const fn kind(&self) -> ConversationKind {
+        self.kind
+    }
+
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationMember {
+    conversation_id: ConversationId,
+    user_id: UserId,
+    joined_at: DateTime<Utc>,
+    last_read_message_id: Option<MessageId>,
+}
+
+impl ConversationMember {
+    pub fn new(
+        conversation_id: ConversationId,
+        user_id: UserId,
+        joined_at: DateTime<Utc>,
+        last_read_message_id: Option<MessageId>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            user_id,
+            joined_at,
+            last_read_message_id,
+        }
+    }
+
+    pub const fn conversation_id(&self) -> ConversationId {
+        self.conversation_id
+    }
+
+    pub const fn user_id(&self) -> UserId {
+        self.user_id
+    }
+
+    pub const fn joined_at(&self) -> &DateTime<Utc> {
+        &self.joined_at
+    }
+
+    pub const fn last_read_message_id(&self) -> Option<MessageId> {
+        self.last_read_message_id
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Message {
+    id: MessageId,
+    conversation_id: ConversationId,
+    author_id: UserId,
+    body: String,
+    media_id: Option<MediaAssetId>,
+    created_at: DateTime<Utc>,
+}
+
+impl Message {
+    pub fn new(
+        id: MessageId,
+        conversation_id: ConversationId,
+        author_id: UserId,
+        body: String,
+        media_id: Option<MediaAssetId>,
+        created_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            id,
+            conversation_id,
+            author_id,
+            body,
+            media_id,
+            created_at,
+        }
+    }
+
+    pub const fn id(&self) -> MessageId {
+        self.id
+    }
+
+    pub const fn conversation_id(&self) -> ConversationId {
+        self.conversation_id
+    }
+
+    pub const fn author_id(&self) -> UserId {
+        self.author_id
+    }
+
+    pub fn body(&self) -> &str {
+        &self.body
+    }
+
+    pub const fn media_id(&self) -> Option<MediaAssetId> {
+        self.media_id
+    }
+
+    pub const fn created_at(&self) -> &DateTime<Utc> {
+        &self.created_at
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateMessage {
+    conversation_id: ConversationId,
+    author_id: UserId,
+    body: String,
+    media_id: Option<MediaAssetId>,
+}
+
+impl CreateMessage {
+    pub fn new(conversation_id: ConversationId, author_id: UserId, body: impl Into<String>) -> Self {
+        Self {
+            conversation_id,
+            author_id,
+            body: body.into(),
+            media_id: None,
+        }
+    }
+
+    pub const fn with_media_id(mut self, media_id: MediaAssetId) -> Self {
+        self.media_id = Some(media_id);
+        self
+    }
+
+    pub const fn conversation_id(&self) -> ConversationId {
+        self.conversation_id
+    }
+
+    pub const fn author_id(&self) -> UserId {
+        self.author_id
+    }
+
+    pub fn body(&self) -> &str {
+        &self.body
+    }
+
+    pub const fn media_id(&self) -> Option<MediaAssetId> {
+        self.media_id
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceMetadata {
     pub name: String,
     pub version: String,
@@ -1023,5 +1303,18 @@ mod tests {
             Some(MediaKind::Video)
         );
         assert_eq!(MediaKind::from_str("audio"), None);
+    }
+
+    #[test]
+    fn conversation_kind_round_trips_storage_value() {
+        assert_eq!(
+            ConversationKind::from_str(ConversationKind::Dm.as_str()),
+            Some(ConversationKind::Dm)
+        );
+        assert_eq!(
+            ConversationKind::from_str(ConversationKind::Group.as_str()),
+            Some(ConversationKind::Group)
+        );
+        assert_eq!(ConversationKind::from_str("thread"), None);
     }
 }

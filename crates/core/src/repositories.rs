@@ -3203,3 +3203,246 @@ pub mod reels {
             AND reels.deleted_at IS NULL
     "#;
 }
+
+pub mod conversations {
+    use chrono::{DateTime, Utc};
+    use sqlx::{FromRow, PgPool};
+    use uuid::Uuid;
+
+    use crate::models::{
+        Conversation, ConversationId, ConversationKind, ConversationMember, CreateConversation,
+        CreateMessage, MediaAssetId, Message, MessageId, UserId,
+    };
+
+    #[derive(Debug, FromRow)]
+    struct ConversationRow {
+        id: Uuid,
+        kind: String,
+        title: Option<String>,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct ConversationMemberRow {
+        conversation_id: Uuid,
+        user_id: Uuid,
+        joined_at: DateTime<Utc>,
+        last_read_message_id: Option<Uuid>,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct MessageRow {
+        id: Uuid,
+        conversation_id: Uuid,
+        author_id: Uuid,
+        body: String,
+        media_id: Option<Uuid>,
+        created_at: DateTime<Utc>,
+    }
+
+    impl TryFrom<ConversationRow> for Conversation {
+        type Error = sqlx::Error;
+
+        fn try_from(row: ConversationRow) -> Result<Self, Self::Error> {
+            Ok(Self::new(
+                ConversationId::from(row.id),
+                decode_conversation_kind(&row.kind)?,
+                row.title,
+                row.created_at,
+                row.updated_at,
+            ))
+        }
+    }
+
+    impl From<ConversationMemberRow> for ConversationMember {
+        fn from(row: ConversationMemberRow) -> Self {
+            Self::new(
+                ConversationId::from(row.conversation_id),
+                UserId::from(row.user_id),
+                row.joined_at,
+                row.last_read_message_id.map(MessageId::from),
+            )
+        }
+    }
+
+    impl From<MessageRow> for Message {
+        fn from(row: MessageRow) -> Self {
+            Self::new(
+                MessageId::from(row.id),
+                ConversationId::from(row.conversation_id),
+                UserId::from(row.author_id),
+                row.body,
+                row.media_id.map(MediaAssetId::from),
+                row.created_at,
+            )
+        }
+    }
+
+    pub async fn create(
+        pool: &PgPool,
+        input: &CreateConversation,
+    ) -> sqlx::Result<Conversation> {
+        let title = input.title().map(str::trim).filter(|value| !value.is_empty());
+        let row = sqlx::query_as::<_, ConversationRow>(
+            r#"
+            INSERT INTO conversations (kind, title)
+            VALUES ($1, $2)
+            RETURNING id, kind, title, created_at, updated_at
+            "#,
+        )
+        .bind(input.kind().as_str())
+        .bind(title)
+        .fetch_one(pool)
+        .await?;
+
+        Conversation::try_from(row)
+    }
+
+    pub async fn find_by_id(
+        pool: &PgPool,
+        id: ConversationId,
+    ) -> sqlx::Result<Option<Conversation>> {
+        let row = sqlx::query_as::<_, ConversationRow>(
+            r#"
+            SELECT id, kind, title, created_at, updated_at
+            FROM conversations
+            WHERE id = $1
+            "#,
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(Conversation::try_from).transpose()
+    }
+
+    pub async fn add_member(
+        pool: &PgPool,
+        conversation_id: ConversationId,
+        user_id: UserId,
+    ) -> sqlx::Result<ConversationMember> {
+        let row = sqlx::query_as::<_, ConversationMemberRow>(
+            r#"
+            INSERT INTO conversation_members (conversation_id, user_id)
+            VALUES ($1, $2)
+            ON CONFLICT (conversation_id, user_id) DO UPDATE
+            SET joined_at = conversation_members.joined_at
+            RETURNING conversation_id, user_id, joined_at, last_read_message_id
+            "#,
+        )
+        .bind(conversation_id.as_uuid())
+        .bind(user_id.as_uuid())
+        .fetch_one(pool)
+        .await?;
+
+        Ok(ConversationMember::from(row))
+    }
+
+    pub async fn list_members(
+        pool: &PgPool,
+        conversation_id: ConversationId,
+    ) -> sqlx::Result<Vec<ConversationMember>> {
+        let rows = sqlx::query_as::<_, ConversationMemberRow>(
+            r#"
+            SELECT conversation_id, user_id, joined_at, last_read_message_id
+            FROM conversation_members
+            WHERE conversation_id = $1
+            ORDER BY joined_at ASC, user_id ASC
+            "#,
+        )
+        .bind(conversation_id.as_uuid())
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows.into_iter().map(ConversationMember::from).collect())
+    }
+
+    pub async fn create_message(pool: &PgPool, input: &CreateMessage) -> sqlx::Result<Message> {
+        let row = sqlx::query_as::<_, MessageRow>(
+            r#"
+            INSERT INTO messages (conversation_id, author_id, body, media_id)
+            SELECT $1, $2, $3, $4
+            WHERE EXISTS (
+                SELECT 1
+                FROM conversation_members
+                WHERE conversation_id = $1 AND user_id = $2
+            )
+            RETURNING id, conversation_id, author_id, body, media_id, created_at
+            "#,
+        )
+        .bind(input.conversation_id().as_uuid())
+        .bind(input.author_id().as_uuid())
+        .bind(input.body().trim())
+        .bind(input.media_id().map(MediaAssetId::as_uuid))
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(Message::from).ok_or(sqlx::Error::RowNotFound)
+    }
+
+    pub async fn list_messages(
+        pool: &PgPool,
+        conversation_id: ConversationId,
+        before: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> sqlx::Result<Vec<Message>> {
+        let rows = sqlx::query_as::<_, MessageRow>(
+            r#"
+            SELECT id, conversation_id, author_id, body, media_id, created_at
+            FROM messages
+            WHERE conversation_id = $1
+                AND ($2::timestamptz IS NULL OR created_at < $2)
+            ORDER BY created_at DESC, id DESC
+            LIMIT $3
+            "#,
+        )
+        .bind(conversation_id.as_uuid())
+        .bind(before)
+        .bind(limit.clamp(1, 100))
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows.into_iter().map(Message::from).collect())
+    }
+
+    pub async fn update_last_read(
+        pool: &PgPool,
+        conversation_id: ConversationId,
+        user_id: UserId,
+        message_id: MessageId,
+    ) -> sqlx::Result<ConversationMember> {
+        let row = sqlx::query_as::<_, ConversationMemberRow>(
+            r#"
+            UPDATE conversation_members
+            SET last_read_message_id = $3
+            WHERE conversation_id = $1
+                AND user_id = $2
+                AND EXISTS (
+                    SELECT 1
+                    FROM messages
+                    WHERE id = $3 AND conversation_id = $1
+                )
+            RETURNING conversation_id, user_id, joined_at, last_read_message_id
+            "#,
+        )
+        .bind(conversation_id.as_uuid())
+        .bind(user_id.as_uuid())
+        .bind(message_id.as_uuid())
+        .fetch_one(pool)
+        .await?;
+
+        Ok(ConversationMember::from(row))
+    }
+
+    fn decode_conversation_kind(value: &str) -> sqlx::Result<ConversationKind> {
+        ConversationKind::from_str(value).ok_or_else(|| sqlx::Error::ColumnDecode {
+            index: "kind".to_owned(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unknown conversation kind {value:?}"),
+            )
+            .into(),
+        })
+    }
+}
