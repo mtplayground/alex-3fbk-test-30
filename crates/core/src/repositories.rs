@@ -2543,7 +2543,289 @@ pub mod search {
 
 pub mod stories {
     use chrono::{DateTime, Utc};
-    use sqlx::PgPool;
+    use sqlx::{FromRow, PgPool};
+    use uuid::Uuid;
+
+    use crate::models::UserId;
+
+    #[derive(Debug, Clone)]
+    pub struct CreateStory {
+        pub author_id: UserId,
+        pub media_id: Uuid,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct Story {
+        pub id: Uuid,
+        pub author: StoryAuthor,
+        pub media: StoryMedia,
+        pub created_at: DateTime<Utc>,
+        pub expires_at: DateTime<Utc>,
+        pub viewer_count: i64,
+        pub viewed_at: Option<DateTime<Utc>>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct StoryAuthor {
+        pub id: UserId,
+        pub handle: String,
+        pub display_name: String,
+        pub avatar_key: Option<String>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct StoryMedia {
+        pub id: Uuid,
+        pub kind: String,
+        pub status: String,
+        pub original_key: String,
+        pub variants: serde_json::Value,
+        pub width: Option<i32>,
+        pub height: Option<i32>,
+        pub duration_ms: Option<i64>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct StoryViewer {
+        pub id: UserId,
+        pub handle: String,
+        pub display_name: String,
+        pub avatar_key: Option<String>,
+        pub viewed_at: DateTime<Utc>,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct StoryRow {
+        id: Uuid,
+        author_id: Uuid,
+        author_handle: String,
+        author_display_name: String,
+        author_avatar_key: Option<String>,
+        media_id: Uuid,
+        media_kind: String,
+        media_status: String,
+        original_key: String,
+        variants: sqlx::types::Json<serde_json::Value>,
+        width: Option<i32>,
+        height: Option<i32>,
+        duration_ms: Option<i64>,
+        created_at: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+        viewer_count: i64,
+        viewed_at: Option<DateTime<Utc>>,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct StoryViewerRow {
+        id: Uuid,
+        handle: String,
+        display_name: String,
+        avatar_key: Option<String>,
+        viewed_at: DateTime<Utc>,
+    }
+
+    impl From<StoryRow> for Story {
+        fn from(row: StoryRow) -> Self {
+            Self {
+                id: row.id,
+                author: StoryAuthor {
+                    id: UserId::from(row.author_id),
+                    handle: row.author_handle,
+                    display_name: row.author_display_name,
+                    avatar_key: row.author_avatar_key,
+                },
+                media: StoryMedia {
+                    id: row.media_id,
+                    kind: row.media_kind,
+                    status: row.media_status,
+                    original_key: row.original_key,
+                    variants: row.variants.0,
+                    width: row.width,
+                    height: row.height,
+                    duration_ms: row.duration_ms,
+                },
+                created_at: row.created_at,
+                expires_at: row.expires_at,
+                viewer_count: row.viewer_count,
+                viewed_at: row.viewed_at,
+            }
+        }
+    }
+
+    impl From<StoryViewerRow> for StoryViewer {
+        fn from(row: StoryViewerRow) -> Self {
+            Self {
+                id: UserId::from(row.id),
+                handle: row.handle,
+                display_name: row.display_name,
+                avatar_key: row.avatar_key,
+                viewed_at: row.viewed_at,
+            }
+        }
+    }
+
+    pub async fn create(pool: &PgPool, input: &CreateStory) -> sqlx::Result<Story> {
+        let story_id: Uuid = sqlx::query_scalar(
+            r#"
+            INSERT INTO stories (author_id, media_id)
+            SELECT $1, media_assets.id
+            FROM media_assets
+            WHERE media_assets.id = $2
+                AND media_assets.owner_id = $1
+                AND media_assets.status IN ('uploaded', 'processing', 'ready')
+            RETURNING id
+            "#,
+        )
+        .bind(input.author_id.as_uuid())
+        .bind(input.media_id)
+        .fetch_one(pool)
+        .await?;
+
+        find_by_id(pool, story_id, Some(input.author_id))
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)
+    }
+
+    pub async fn find_by_id(
+        pool: &PgPool,
+        story_id: Uuid,
+        viewer_id: Option<UserId>,
+    ) -> sqlx::Result<Option<Story>> {
+        let row = sqlx::query_as::<_, StoryRow>(SELECT_STORY_SQL)
+            .bind(story_id)
+            .bind(viewer_id.map(UserId::as_uuid))
+            .fetch_optional(pool)
+            .await?;
+
+        Ok(row.map(Story::from))
+    }
+
+    pub async fn list_feed(pool: &PgPool, viewer_id: UserId) -> sqlx::Result<Vec<Story>> {
+        let rows = sqlx::query_as::<_, StoryRow>(
+            r#"
+            SELECT
+                stories.id,
+                stories.author_id,
+                users.handle AS author_handle,
+                users.display_name AS author_display_name,
+                users.avatar_key AS author_avatar_key,
+                media_assets.id AS media_id,
+                media_assets.kind AS media_kind,
+                media_assets.status AS media_status,
+                media_assets.original_key,
+                media_assets.variants,
+                media_assets.width,
+                media_assets.height,
+                media_assets.duration_ms,
+                stories.created_at,
+                stories.expires_at,
+                COUNT(all_views.viewer_id)::bigint AS viewer_count,
+                viewer_view.viewed_at
+            FROM stories
+            JOIN follows
+                ON follows.followee_id = stories.author_id
+                AND follows.follower_id = $1
+                AND follows.state = 'accepted'
+            JOIN users ON users.id = stories.author_id
+            JOIN media_assets ON media_assets.id = stories.media_id
+            LEFT JOIN story_views AS all_views ON all_views.story_id = stories.id
+            LEFT JOIN story_views AS viewer_view
+                ON viewer_view.story_id = stories.id
+                AND viewer_view.viewer_id = $1
+            WHERE stories.expires_at > now()
+            GROUP BY
+                stories.id,
+                stories.author_id,
+                users.handle,
+                users.display_name,
+                users.avatar_key,
+                media_assets.id,
+                media_assets.kind,
+                media_assets.status,
+                media_assets.original_key,
+                media_assets.variants,
+                media_assets.width,
+                media_assets.height,
+                media_assets.duration_ms,
+                stories.created_at,
+                stories.expires_at,
+                viewer_view.viewed_at
+            ORDER BY users.handle ASC, stories.created_at DESC, stories.id DESC
+            "#,
+        )
+        .bind(viewer_id.as_uuid())
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows.into_iter().map(Story::from).collect())
+    }
+
+    pub async fn mark_viewed(
+        pool: &PgPool,
+        story_id: Uuid,
+        viewer_id: UserId,
+    ) -> sqlx::Result<DateTime<Utc>> {
+        sqlx::query_scalar(
+            r#"
+            INSERT INTO story_views (story_id, viewer_id)
+            SELECT stories.id, $2
+            FROM stories
+            WHERE stories.id = $1
+                AND stories.expires_at > now()
+            ON CONFLICT (story_id, viewer_id)
+            DO UPDATE SET viewed_at = story_views.viewed_at
+            RETURNING viewed_at
+            "#,
+        )
+        .bind(story_id)
+        .bind(viewer_id.as_uuid())
+        .fetch_one(pool)
+        .await
+    }
+
+    pub async fn list_viewers(
+        pool: &PgPool,
+        story_id: Uuid,
+        author_id: UserId,
+    ) -> sqlx::Result<Vec<StoryViewer>> {
+        let authorized: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM stories
+                WHERE id = $1 AND author_id = $2
+            )
+            "#,
+        )
+        .bind(story_id)
+        .bind(author_id.as_uuid())
+        .fetch_one(pool)
+        .await?;
+
+        if !authorized {
+            return Err(sqlx::Error::RowNotFound);
+        }
+
+        let rows = sqlx::query_as::<_, StoryViewerRow>(
+            r#"
+            SELECT
+                users.id,
+                users.handle,
+                users.display_name,
+                users.avatar_key,
+                story_views.viewed_at
+            FROM story_views
+            JOIN users ON users.id = story_views.viewer_id
+            WHERE story_views.story_id = $1
+            ORDER BY story_views.viewed_at DESC, users.handle ASC
+            "#,
+        )
+        .bind(story_id)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows.into_iter().map(StoryViewer::from).collect())
+    }
 
     pub async fn delete_expired_before(
         pool: &PgPool,
@@ -2561,4 +2843,50 @@ pub mod stories {
 
         Ok(result.rows_affected())
     }
+
+    const SELECT_STORY_SQL: &str = r#"
+        SELECT
+            stories.id,
+            stories.author_id,
+            users.handle AS author_handle,
+            users.display_name AS author_display_name,
+            users.avatar_key AS author_avatar_key,
+            media_assets.id AS media_id,
+            media_assets.kind AS media_kind,
+            media_assets.status AS media_status,
+            media_assets.original_key,
+            media_assets.variants,
+            media_assets.width,
+            media_assets.height,
+            media_assets.duration_ms,
+            stories.created_at,
+            stories.expires_at,
+            COUNT(all_views.viewer_id)::bigint AS viewer_count,
+            viewer_view.viewed_at
+        FROM stories
+        JOIN users ON users.id = stories.author_id
+        JOIN media_assets ON media_assets.id = stories.media_id
+        LEFT JOIN story_views AS all_views ON all_views.story_id = stories.id
+        LEFT JOIN story_views AS viewer_view
+            ON viewer_view.story_id = stories.id
+            AND viewer_view.viewer_id = $2
+        WHERE stories.id = $1
+        GROUP BY
+            stories.id,
+            stories.author_id,
+            users.handle,
+            users.display_name,
+            users.avatar_key,
+            media_assets.id,
+            media_assets.kind,
+            media_assets.status,
+            media_assets.original_key,
+            media_assets.variants,
+            media_assets.width,
+            media_assets.height,
+            media_assets.duration_ms,
+            stories.created_at,
+            stories.expires_at,
+            viewer_view.viewed_at
+    "#;
 }
