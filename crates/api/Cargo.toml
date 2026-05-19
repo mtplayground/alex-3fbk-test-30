@@ -10,6 +10,10 @@ repository.workspace = true
 name = "api"
 path = "src/main.rs"
 
+[[bin]]
+name = "seed"
+path = "../../scripts/seed.rs"
+
 [dependencies]
 axum.workspace = true
 chrono.workspace = true
