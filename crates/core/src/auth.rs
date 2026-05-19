@@ -249,6 +249,7 @@ mod tests {
     fn password_hash_round_trip_verifies_only_original_password() {
         let hash = hash_password("correct horse battery staple").expect("hash should be created");
 
+        assert!(hash.starts_with("$argon2id$"));
         assert!(verify_password("correct horse battery staple", &hash).expect("hash should verify"));
         assert!(!verify_password("wrong password", &hash).expect("hash should verify"));
     }
@@ -272,6 +273,10 @@ mod tests {
         assert_eq!(claims.user_id().expect("subject should parse"), user_id);
         assert_eq!(claims.token_kind(), TokenKind::Access);
         assert_eq!(claims.jti(), None);
+        assert_eq!(
+            claims.expires_at_timestamp() - claims.issued_at_timestamp(),
+            Duration::minutes(ACCESS_TOKEN_MINUTES).num_seconds() as usize
+        );
     }
 
     #[test]
@@ -284,6 +289,10 @@ mod tests {
         assert_eq!(claims.user_id().expect("subject should parse"), user_id);
         assert_eq!(claims.token_kind(), TokenKind::Refresh);
         assert!(claims.jti().is_some());
+        assert_eq!(
+            claims.expires_at_timestamp() - claims.issued_at_timestamp(),
+            Duration::days(REFRESH_TOKEN_DAYS).num_seconds() as usize
+        );
     }
 
     #[test]
