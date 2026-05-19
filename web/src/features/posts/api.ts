@@ -81,6 +81,15 @@ export function getPost(id: string) {
   return apiRequest<PostResponse>(`/posts/${encodeURIComponent(id)}`);
 }
 
+export function getFeed(cursor?: string | null) {
+  const params = new URLSearchParams({ limit: '10' });
+  if (cursor) {
+    params.set('cursor', cursor);
+  }
+
+  return apiRequest<PostsPageResponse>(`/feed?${params.toString()}`);
+}
+
 export function getUserPosts(handle: string, cursor?: string | null) {
   const params = new URLSearchParams({ limit: '24' });
   if (cursor) {
