@@ -7,6 +7,7 @@ export function RootLayout() {
   const navItems = [
     { label: 'Home', to: '/' },
     { label: 'Explore', to: '/explore' },
+    { label: 'Reels', to: '/reels' },
     { label: 'Messages', to: '/dm' },
     { label: 'Profile', to: auth.user ? `/u/${auth.user.handle}` : '/login' },
     { label: 'Settings', to: '/settings/profile' },
