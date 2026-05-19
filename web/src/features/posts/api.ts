@@ -90,6 +90,29 @@ export function getFeed(cursor?: string | null) {
   return apiRequest<PostsPageResponse>(`/feed?${params.toString()}`);
 }
 
+export function getExplore({
+  cursor,
+  hashtag,
+  place,
+}: {
+  cursor?: string | null;
+  hashtag?: string | null;
+  place?: string | null;
+}) {
+  const params = new URLSearchParams({ limit: '18' });
+  if (cursor) {
+    params.set('cursor', cursor);
+  }
+  if (hashtag) {
+    params.set('hashtag', hashtag);
+  }
+  if (place) {
+    params.set('place', place);
+  }
+
+  return apiRequest<PostsPageResponse>(`/explore?${params.toString()}`);
+}
+
 export function getUserPosts(handle: string, cursor?: string | null) {
   const params = new URLSearchParams({ limit: '24' });
   if (cursor) {
