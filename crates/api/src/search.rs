@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use zeroclaw_core::repositories::search as search_repo;
 
 use crate::error::AppError;
+use crate::extractors::OptionalAuthUser;
 use crate::posts::PostResponse;
 use crate::state::AppState;
 
@@ -41,6 +42,7 @@ pub struct SearchHashtagResponse {
 
 pub async fn search(
     State(state): State<AppState>,
+    OptionalAuthUser(auth_user): OptionalAuthUser,
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<SearchResponse>, AppError> {
     let q = normalize_query(query.q)?;
@@ -48,9 +50,10 @@ pub async fn search(
         .limit
         .unwrap_or(DEFAULT_SEARCH_LIMIT)
         .clamp(1, MAX_SEARCH_LIMIT);
-    let users = search_repo::users(state.db_pool(), &q, limit).await?;
-    let hashtags = search_repo::hashtags(state.db_pool(), &q, limit).await?;
-    let posts = search_repo::posts_matching(state.db_pool(), &q, limit).await?;
+    let viewer_id = auth_user.map(|user| user.id());
+    let users = search_repo::users(state.db_pool(), viewer_id, &q, limit).await?;
+    let hashtags = search_repo::hashtags(state.db_pool(), viewer_id, &q, limit).await?;
+    let posts = search_repo::posts_matching(state.db_pool(), viewer_id, &q, limit).await?;
 
     Ok(Json(SearchResponse {
         users: users.into_iter().map(SearchUserResponse::from).collect(),

@@ -135,6 +135,7 @@ pub async fn delete_post(
 
 pub async fn get_user_posts(
     State(state): State<AppState>,
+    OptionalAuthUser(auth_user): OptionalAuthUser,
     Path(handle): Path<String>,
     Query(query): Query<PostsQuery>,
 ) -> Result<Json<PostsPageResponse>, AppError> {
@@ -147,7 +148,14 @@ pub async fn get_user_posts(
         .unwrap_or(DEFAULT_PAGE_LIMIT)
         .clamp(1, MAX_PAGE_LIMIT);
     let cursor = parse_cursor(query.cursor)?;
-    let posts = posts::list_by_author(state.db_pool(), user.id(), cursor, limit + 1).await?;
+    let posts = posts::list_by_author(
+        state.db_pool(),
+        user.id(),
+        auth_user.map(|user| user.id()),
+        cursor,
+        limit + 1,
+    )
+    .await?;
     let has_next = posts.len() > limit as usize;
     let page_posts: Vec<_> = posts.into_iter().take(limit as usize).collect();
     let next_cursor = if has_next {

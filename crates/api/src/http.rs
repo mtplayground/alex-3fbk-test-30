@@ -13,6 +13,7 @@ use crate::follows::{
 };
 use crate::health::healthz;
 use crate::media::{complete_upload, create_upload};
+use crate::moderation::{block_user, create_report, unblock_user};
 use crate::notifications::{
     list_notifications, mark_all_notifications_read, unread_notification_count,
 };
@@ -41,6 +42,7 @@ pub fn router(state: AppState) -> Router {
         .route("/notifications", get(list_notifications))
         .route("/notifications/read-all", post(mark_all_notifications_read))
         .route("/notifications/unread-count", get(unread_notification_count))
+        .route("/reports", post(create_report))
         .route("/explore", get(get_explore))
         .route("/feed", get(get_feed))
         .route("/search", get(search))
@@ -75,6 +77,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/users/:handle/follow",
             post(follow_user).delete(unfollow_user),
+        )
+        .route(
+            "/users/:handle/block",
+            post(block_user).delete(unblock_user),
         )
         .route("/users/:handle/followers", get(get_followers))
         .route("/users/:handle/following", get(get_following))
