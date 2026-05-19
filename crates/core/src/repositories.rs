@@ -1491,3 +1491,176 @@ pub mod posts {
         })
     }
 }
+
+pub mod comments {
+    use chrono::{DateTime, Utc};
+    use sqlx::{FromRow, PgPool};
+    use uuid::Uuid;
+
+    use crate::models::UserId;
+
+    #[derive(Debug, Clone)]
+    pub struct Comment {
+        pub id: Uuid,
+        pub post_id: Uuid,
+        pub parent_id: Option<Uuid>,
+        pub author_id: UserId,
+        pub author_handle: String,
+        pub body: String,
+        pub created_at: DateTime<Utc>,
+    }
+
+    pub struct CreateComment {
+        pub post_id: Uuid,
+        pub parent_id: Option<Uuid>,
+        pub author_id: UserId,
+        pub body: String,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct CommentRow {
+        id: Uuid,
+        post_id: Uuid,
+        parent_id: Option<Uuid>,
+        author_id: Uuid,
+        author_handle: String,
+        body: String,
+        created_at: DateTime<Utc>,
+    }
+
+    impl From<CommentRow> for Comment {
+        fn from(row: CommentRow) -> Self {
+            Self {
+                id: row.id,
+                post_id: row.post_id,
+                parent_id: row.parent_id,
+                author_id: UserId::from(row.author_id),
+                author_handle: row.author_handle,
+                body: row.body,
+                created_at: row.created_at,
+            }
+        }
+    }
+
+    pub async fn create(pool: &PgPool, input: &CreateComment) -> sqlx::Result<Comment> {
+        let post_exists: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM posts
+                WHERE id = $1 AND deleted_at IS NULL
+            )
+            "#,
+        )
+        .bind(input.post_id)
+        .fetch_one(pool)
+        .await?;
+
+        if !post_exists {
+            return Err(sqlx::Error::RowNotFound);
+        }
+
+        if let Some(parent_id) = input.parent_id {
+            let parent_is_top_level: Option<bool> = sqlx::query_scalar(
+                r#"
+                SELECT parent_id IS NULL
+                FROM comments
+                WHERE id = $1 AND post_id = $2
+                "#,
+            )
+            .bind(parent_id)
+            .bind(input.post_id)
+            .fetch_optional(pool)
+            .await?;
+
+            if parent_is_top_level != Some(true) {
+                return Err(sqlx::Error::RowNotFound);
+            }
+        }
+
+        let row = sqlx::query_as::<_, CommentRow>(
+            r#"
+            WITH inserted AS (
+                INSERT INTO comments (post_id, parent_id, author_id, body)
+                VALUES ($1, $2, $3, $4)
+                RETURNING id, post_id, parent_id, author_id, body, created_at
+            )
+            SELECT
+                inserted.id,
+                inserted.post_id,
+                inserted.parent_id,
+                inserted.author_id,
+                users.handle AS author_handle,
+                inserted.body,
+                inserted.created_at
+            FROM inserted
+            JOIN users ON users.id = inserted.author_id
+            "#,
+        )
+        .bind(input.post_id)
+        .bind(input.parent_id)
+        .bind(input.author_id.as_uuid())
+        .bind(input.body.trim())
+        .fetch_one(pool)
+        .await?;
+
+        Ok(Comment::from(row))
+    }
+
+    pub async fn list_by_post(pool: &PgPool, post_id: Uuid) -> sqlx::Result<Vec<Comment>> {
+        let post_exists: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM posts
+                WHERE id = $1 AND deleted_at IS NULL
+            )
+            "#,
+        )
+        .bind(post_id)
+        .fetch_one(pool)
+        .await?;
+
+        if !post_exists {
+            return Err(sqlx::Error::RowNotFound);
+        }
+
+        let rows = sqlx::query_as::<_, CommentRow>(
+            r#"
+            SELECT
+                comments.id,
+                comments.post_id,
+                comments.parent_id,
+                comments.author_id,
+                users.handle AS author_handle,
+                comments.body,
+                comments.created_at
+            FROM comments
+            JOIN users ON users.id = comments.author_id
+            WHERE comments.post_id = $1
+            ORDER BY
+                COALESCE(comments.parent_id, comments.id) ASC,
+                comments.parent_id NULLS FIRST,
+                comments.created_at ASC
+            "#,
+        )
+        .bind(post_id)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows.into_iter().map(Comment::from).collect())
+    }
+
+    pub async fn delete(pool: &PgPool, id: Uuid, author_id: UserId) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM comments
+            WHERE id = $1 AND author_id = $2
+            "#,
+        )
+        .bind(id)
+        .bind(author_id.as_uuid())
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+}

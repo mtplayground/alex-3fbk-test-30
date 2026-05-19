@@ -3,6 +3,7 @@ use axum::Router;
 use tower_http::trace::TraceLayer;
 
 use crate::auth::{forgot_password, login, logout, refresh, reset_password, signup, verify_email};
+use crate::comments::{create_comment, delete_comment, get_post_comments};
 use crate::health::healthz;
 use crate::media::{complete_upload, create_upload};
 use crate::posts::{create_post, delete_post, get_post, get_user_posts};
@@ -23,6 +24,11 @@ pub fn router(state: AppState) -> Router {
         .route("/media/uploads/:id/complete", post(complete_upload))
         .route("/posts", post(create_post))
         .route("/posts/:id", get(get_post).delete(delete_post))
+        .route(
+            "/posts/:id/comments",
+            get(get_post_comments).post(create_comment),
+        )
+        .route("/comments/:id", axum::routing::delete(delete_comment))
         .route("/users/:handle", get(get_user_profile))
         .route("/users/:handle/posts", get(get_user_posts))
         .route("/me", axum::routing::patch(update_me))
