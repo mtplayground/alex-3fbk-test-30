@@ -1909,3 +1909,241 @@ pub mod social {
         }
     }
 }
+
+pub mod follows {
+    use chrono::{DateTime, Utc};
+    use sqlx::{FromRow, PgPool};
+    use uuid::Uuid;
+
+    use crate::models::UserId;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum FollowState {
+        Accepted,
+        Pending,
+    }
+
+    impl FollowState {
+        pub const fn as_str(self) -> &'static str {
+            match self {
+                Self::Accepted => "accepted",
+                Self::Pending => "pending",
+            }
+        }
+
+        fn from_str(value: &str) -> Option<Self> {
+            match value {
+                "accepted" => Some(Self::Accepted),
+                "pending" => Some(Self::Pending),
+                _ => None,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct Follow {
+        pub follower_id: UserId,
+        pub followee_id: UserId,
+        pub state: FollowState,
+        pub created_at: DateTime<Utc>,
+        pub updated_at: DateTime<Utc>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct FollowUser {
+        pub id: UserId,
+        pub handle: String,
+        pub display_name: String,
+        pub avatar_key: Option<String>,
+        pub is_private: bool,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct FollowRow {
+        follower_id: Uuid,
+        followee_id: Uuid,
+        state: String,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct FollowUserRow {
+        id: Uuid,
+        handle: String,
+        display_name: String,
+        avatar_key: Option<String>,
+        is_private: bool,
+    }
+
+    impl TryFrom<FollowRow> for Follow {
+        type Error = sqlx::Error;
+
+        fn try_from(row: FollowRow) -> Result<Self, Self::Error> {
+            let state =
+                FollowState::from_str(&row.state).ok_or_else(|| sqlx::Error::ColumnDecode {
+                    index: "state".to_owned(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("unknown follow state {:?}", row.state),
+                    )
+                    .into(),
+                })?;
+
+            Ok(Self {
+                follower_id: UserId::from(row.follower_id),
+                followee_id: UserId::from(row.followee_id),
+                state,
+                created_at: row.created_at,
+                updated_at: row.updated_at,
+            })
+        }
+    }
+
+    impl From<FollowUserRow> for FollowUser {
+        fn from(row: FollowUserRow) -> Self {
+            Self {
+                id: UserId::from(row.id),
+                handle: row.handle,
+                display_name: row.display_name,
+                avatar_key: row.avatar_key,
+                is_private: row.is_private,
+            }
+        }
+    }
+
+    pub async fn upsert(
+        pool: &PgPool,
+        follower_id: UserId,
+        followee_id: UserId,
+        state: FollowState,
+    ) -> sqlx::Result<Follow> {
+        let row = sqlx::query_as::<_, FollowRow>(
+            r#"
+            INSERT INTO follows (follower_id, followee_id, state)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (follower_id, followee_id)
+            DO UPDATE SET state = EXCLUDED.state, updated_at = now()
+            RETURNING follower_id, followee_id, state, created_at, updated_at
+            "#,
+        )
+        .bind(follower_id.as_uuid())
+        .bind(followee_id.as_uuid())
+        .bind(state.as_str())
+        .fetch_one(pool)
+        .await?;
+
+        Follow::try_from(row)
+    }
+
+    pub async fn delete(
+        pool: &PgPool,
+        follower_id: UserId,
+        followee_id: UserId,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM follows
+            WHERE follower_id = $1 AND followee_id = $2
+            "#,
+        )
+        .bind(follower_id.as_uuid())
+        .bind(followee_id.as_uuid())
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn accept(
+        pool: &PgPool,
+        follower_id: UserId,
+        followee_id: UserId,
+    ) -> sqlx::Result<Option<Follow>> {
+        let row = sqlx::query_as::<_, FollowRow>(
+            r#"
+            UPDATE follows
+            SET state = 'accepted', updated_at = now()
+            WHERE follower_id = $1
+                AND followee_id = $2
+                AND state = 'pending'
+            RETURNING follower_id, followee_id, state, created_at, updated_at
+            "#,
+        )
+        .bind(follower_id.as_uuid())
+        .bind(followee_id.as_uuid())
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(Follow::try_from).transpose()
+    }
+
+    pub async fn reject(
+        pool: &PgPool,
+        follower_id: UserId,
+        followee_id: UserId,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM follows
+            WHERE follower_id = $1
+                AND followee_id = $2
+                AND state = 'pending'
+            "#,
+        )
+        .bind(follower_id.as_uuid())
+        .bind(followee_id.as_uuid())
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn list_followers(
+        pool: &PgPool,
+        followee_id: UserId,
+    ) -> sqlx::Result<Vec<FollowUser>> {
+        list_users_for_follow_relation(pool, "followers", followee_id).await
+    }
+
+    pub async fn list_following(
+        pool: &PgPool,
+        follower_id: UserId,
+    ) -> sqlx::Result<Vec<FollowUser>> {
+        list_users_for_follow_relation(pool, "following", follower_id).await
+    }
+
+    async fn list_users_for_follow_relation(
+        pool: &PgPool,
+        relation: &str,
+        user_id: UserId,
+    ) -> sqlx::Result<Vec<FollowUser>> {
+        let sql = match relation {
+            "followers" => {
+                r#"
+                SELECT users.id, users.handle, users.display_name, users.avatar_key, users.is_private
+                FROM follows
+                JOIN users ON users.id = follows.follower_id
+                WHERE follows.followee_id = $1 AND follows.state = 'accepted'
+                ORDER BY follows.created_at DESC
+                "#
+            }
+            _ => {
+                r#"
+                SELECT users.id, users.handle, users.display_name, users.avatar_key, users.is_private
+                FROM follows
+                JOIN users ON users.id = follows.followee_id
+                WHERE follows.follower_id = $1 AND follows.state = 'accepted'
+                ORDER BY follows.created_at DESC
+                "#
+            }
+        };
+
+        let rows = sqlx::query_as::<_, FollowUserRow>(sql)
+            .bind(user_id.as_uuid())
+            .fetch_all(pool)
+            .await?;
+
+        Ok(rows.into_iter().map(FollowUser::from).collect())
+    }
+}

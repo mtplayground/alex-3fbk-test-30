@@ -9,6 +9,7 @@ mod comments;
 mod email;
 mod error;
 pub mod extractors;
+mod follows;
 mod health;
 mod http;
 mod media;
