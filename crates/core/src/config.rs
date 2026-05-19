@@ -229,6 +229,12 @@ pub struct JwtConfig {
 }
 
 impl JwtConfig {
+    pub fn from_secret(secret: impl Into<String>) -> Self {
+        Self {
+            secret: secret.into(),
+        }
+    }
+
     fn from_env() -> Result<Self> {
         Ok(Self {
             secret: required_env(JWT_SECRET_ENV)?,

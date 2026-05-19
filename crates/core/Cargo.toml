@@ -11,8 +11,11 @@ name = "zeroclaw_core"
 path = "src/lib.rs"
 
 [dependencies]
+argon2.workspace = true
 aws-sdk-s3.workspace = true
 chrono.workspace = true
+jsonwebtoken.workspace = true
+rand_core.workspace = true
 redis.workspace = true
 serde.workspace = true
 sqlx.workspace = true

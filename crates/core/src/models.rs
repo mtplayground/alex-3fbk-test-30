@@ -29,6 +29,31 @@ impl fmt::Display for UserId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct RefreshTokenId(Uuid);
+
+impl RefreshTokenId {
+    pub fn new(value: Uuid) -> Self {
+        Self(value)
+    }
+
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+}
+
+impl From<Uuid> for RefreshTokenId {
+    fn from(value: Uuid) -> Self {
+        Self::new(value)
+    }
+}
+
+impl fmt::Display for RefreshTokenId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct User {
     id: UserId,
@@ -208,6 +233,119 @@ impl CreateUser {
 
     pub const fn is_private(&self) -> bool {
         self.is_private
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefreshToken {
+    id: RefreshTokenId,
+    user_id: UserId,
+    token_jti: Uuid,
+    rotated_from_token_id: Option<RefreshTokenId>,
+    replaced_by_token_id: Option<RefreshTokenId>,
+    revoked_at: Option<DateTime<Utc>>,
+    expires_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
+}
+
+impl RefreshToken {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: RefreshTokenId,
+        user_id: UserId,
+        token_jti: Uuid,
+        rotated_from_token_id: Option<RefreshTokenId>,
+        replaced_by_token_id: Option<RefreshTokenId>,
+        revoked_at: Option<DateTime<Utc>>,
+        expires_at: DateTime<Utc>,
+        created_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            id,
+            user_id,
+            token_jti,
+            rotated_from_token_id,
+            replaced_by_token_id,
+            revoked_at,
+            expires_at,
+            created_at,
+        }
+    }
+
+    pub const fn id(&self) -> RefreshTokenId {
+        self.id
+    }
+
+    pub const fn user_id(&self) -> UserId {
+        self.user_id
+    }
+
+    pub const fn token_jti(&self) -> Uuid {
+        self.token_jti
+    }
+
+    pub const fn rotated_from_token_id(&self) -> Option<RefreshTokenId> {
+        self.rotated_from_token_id
+    }
+
+    pub const fn replaced_by_token_id(&self) -> Option<RefreshTokenId> {
+        self.replaced_by_token_id
+    }
+
+    pub fn revoked_at(&self) -> Option<&DateTime<Utc>> {
+        self.revoked_at.as_ref()
+    }
+
+    pub const fn expires_at(&self) -> &DateTime<Utc> {
+        &self.expires_at
+    }
+
+    pub const fn created_at(&self) -> &DateTime<Utc> {
+        &self.created_at
+    }
+
+    pub fn is_active(&self, now: DateTime<Utc>) -> bool {
+        self.revoked_at.is_none() && self.replaced_by_token_id.is_none() && self.expires_at > now
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateRefreshToken {
+    user_id: UserId,
+    token_jti: Uuid,
+    expires_at: DateTime<Utc>,
+    rotated_from_token_id: Option<RefreshTokenId>,
+}
+
+impl CreateRefreshToken {
+    pub fn new(user_id: UserId, token_jti: Uuid, expires_at: DateTime<Utc>) -> Self {
+        Self {
+            user_id,
+            token_jti,
+            expires_at,
+            rotated_from_token_id: None,
+        }
+    }
+
+    pub const fn rotated_from(mut self, token_id: RefreshTokenId) -> Self {
+        self.rotated_from_token_id = Some(token_id);
+        self
+    }
+
+    pub const fn user_id(&self) -> UserId {
+        self.user_id
+    }
+
+    pub const fn token_jti(&self) -> Uuid {
+        self.token_jti
+    }
+
+    pub const fn expires_at(&self) -> &DateTime<Utc> {
+        &self.expires_at
+    }
+
+    pub const fn rotated_from_token_id(&self) -> Option<RefreshTokenId> {
+        self.rotated_from_token_id
     }
 }
 
