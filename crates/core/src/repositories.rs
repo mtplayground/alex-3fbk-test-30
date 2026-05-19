@@ -1664,3 +1664,248 @@ pub mod comments {
         Ok(result.rows_affected() > 0)
     }
 }
+
+pub mod social {
+    use sqlx::PgPool;
+    use uuid::Uuid;
+
+    use crate::models::UserId;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum LikeTargetKind {
+        Post,
+        Comment,
+    }
+
+    impl LikeTargetKind {
+        pub const fn as_str(self) -> &'static str {
+            match self {
+                Self::Post => "post",
+                Self::Comment => "comment",
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct ToggleResult {
+        pub active: bool,
+        pub count: i64,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct LikeCount {
+        pub target_kind: String,
+        pub target_id: Uuid,
+        pub count: i64,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct SaveCount {
+        pub post_id: Uuid,
+        pub count: i64,
+    }
+
+    pub async fn toggle_like(
+        pool: &PgPool,
+        user_id: UserId,
+        target_kind: LikeTargetKind,
+        target_id: Uuid,
+    ) -> sqlx::Result<ToggleResult> {
+        ensure_like_target_exists(pool, target_kind, target_id).await?;
+
+        let inserted = sqlx::query(
+            r#"
+            INSERT INTO likes (user_id, target_kind, target_id)
+            VALUES ($1, $2, $3)
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(user_id.as_uuid())
+        .bind(target_kind.as_str())
+        .bind(target_id)
+        .execute(pool)
+        .await?
+        .rows_affected()
+            > 0;
+
+        let active = if inserted {
+            true
+        } else {
+            sqlx::query(
+                r#"
+                DELETE FROM likes
+                WHERE user_id = $1 AND target_kind = $2 AND target_id = $3
+                "#,
+            )
+            .bind(user_id.as_uuid())
+            .bind(target_kind.as_str())
+            .bind(target_id)
+            .execute(pool)
+            .await?;
+            false
+        };
+
+        let count = count_likes(pool, target_kind, target_id).await?;
+        Ok(ToggleResult { active, count })
+    }
+
+    pub async fn toggle_save(
+        pool: &PgPool,
+        user_id: UserId,
+        post_id: Uuid,
+    ) -> sqlx::Result<ToggleResult> {
+        ensure_post_exists(pool, post_id).await?;
+
+        let inserted = sqlx::query(
+            r#"
+            INSERT INTO saves (user_id, post_id)
+            VALUES ($1, $2)
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(user_id.as_uuid())
+        .bind(post_id)
+        .execute(pool)
+        .await?
+        .rows_affected()
+            > 0;
+
+        let active = if inserted {
+            true
+        } else {
+            sqlx::query(
+                r#"
+                DELETE FROM saves
+                WHERE user_id = $1 AND post_id = $2
+                "#,
+            )
+            .bind(user_id.as_uuid())
+            .bind(post_id)
+            .execute(pool)
+            .await?;
+            false
+        };
+
+        let count = count_saves(pool, post_id).await?;
+        Ok(ToggleResult { active, count })
+    }
+
+    pub async fn count_likes(
+        pool: &PgPool,
+        target_kind: LikeTargetKind,
+        target_id: Uuid,
+    ) -> sqlx::Result<i64> {
+        sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM likes
+            WHERE target_kind = $1 AND target_id = $2
+            "#,
+        )
+        .bind(target_kind.as_str())
+        .bind(target_id)
+        .fetch_one(pool)
+        .await
+    }
+
+    pub async fn count_saves(pool: &PgPool, post_id: Uuid) -> sqlx::Result<i64> {
+        sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM saves
+            WHERE post_id = $1
+            "#,
+        )
+        .bind(post_id)
+        .fetch_one(pool)
+        .await
+    }
+
+    pub async fn all_like_counts(pool: &PgPool) -> sqlx::Result<Vec<LikeCount>> {
+        let rows = sqlx::query_as::<_, (String, Uuid, i64)>(
+            r#"
+            SELECT target_kind, target_id, COUNT(*) AS count
+            FROM likes
+            GROUP BY target_kind, target_id
+            "#,
+        )
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(target_kind, target_id, count)| LikeCount {
+                target_kind,
+                target_id,
+                count,
+            })
+            .collect())
+    }
+
+    pub async fn all_save_counts(pool: &PgPool) -> sqlx::Result<Vec<SaveCount>> {
+        let rows = sqlx::query_as::<_, (Uuid, i64)>(
+            r#"
+            SELECT post_id, COUNT(*) AS count
+            FROM saves
+            GROUP BY post_id
+            "#,
+        )
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(post_id, count)| SaveCount { post_id, count })
+            .collect())
+    }
+
+    async fn ensure_like_target_exists(
+        pool: &PgPool,
+        target_kind: LikeTargetKind,
+        target_id: Uuid,
+    ) -> sqlx::Result<()> {
+        match target_kind {
+            LikeTargetKind::Post => ensure_post_exists(pool, target_id).await,
+            LikeTargetKind::Comment => {
+                let exists: bool = sqlx::query_scalar(
+                    r#"
+                    SELECT EXISTS (
+                        SELECT 1 FROM comments
+                        JOIN posts ON posts.id = comments.post_id
+                        WHERE comments.id = $1 AND posts.deleted_at IS NULL
+                    )
+                    "#,
+                )
+                .bind(target_id)
+                .fetch_one(pool)
+                .await?;
+
+                if exists {
+                    Ok(())
+                } else {
+                    Err(sqlx::Error::RowNotFound)
+                }
+            }
+        }
+    }
+
+    async fn ensure_post_exists(pool: &PgPool, post_id: Uuid) -> sqlx::Result<()> {
+        let exists: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM posts
+                WHERE id = $1 AND deleted_at IS NULL
+            )
+            "#,
+        )
+        .bind(post_id)
+        .fetch_one(pool)
+        .await?;
+
+        if exists {
+            Ok(())
+        } else {
+            Err(sqlx::Error::RowNotFound)
+        }
+    }
+}
