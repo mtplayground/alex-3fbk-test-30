@@ -26,6 +26,30 @@ npm install
 npm run build
 ```
 
+## Local Development
+
+Create `.env` from `.env.example`, replace every secret and service URL, then
+install the web dependencies and start all local processes:
+
+```bash
+cd web
+npm install
+cd ..
+scripts/dev.sh
+```
+
+`scripts/dev.sh` loads `.env` when present and requires:
+
+- `DATABASE_URL`
+- `REDIS_URL`
+- `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`
+- `JWT_SECRET`
+- `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`
+- `PUBLIC_BASE_URL`
+
+Local ports default to API `8081`, web `8080`, and worker `0`. Override with
+`API_PORT`, `WEB_PORT`, `WORKER_PORT`, and `HOST`.
+
 ## API
 
 The API binary starts an Axum server on `HOST:PORT` and exposes `GET /healthz`.
