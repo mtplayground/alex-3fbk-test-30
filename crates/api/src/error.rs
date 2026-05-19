@@ -3,12 +3,24 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
 use thiserror::Error;
-use zeroclaw_core::ConfigError;
+use zeroclaw_core::{auth::AuthError, ConfigError};
 
 #[derive(Debug, Error)]
 pub enum AppError {
+    #[error("bad request: {0}")]
+    BadRequest(&'static str),
+
+    #[error("unauthorized")]
+    Unauthorized,
+
+    #[error("conflict: {0}")]
+    Conflict(&'static str),
+
     #[error("configuration error: {0}")]
     Config(#[from] ConfigError),
+
+    #[error("authentication error: {0}")]
+    Auth(#[from] AuthError),
 
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
@@ -25,6 +37,9 @@ pub enum AppError {
     #[error("server error: {0}")]
     Server(#[from] axum::Error),
 
+    #[error("internal error: {0}")]
+    Internal(String),
+
     #[error("tracing initialization error: {0}")]
     Tracing(String),
 }
@@ -32,23 +47,34 @@ pub enum AppError {
 impl AppError {
     fn status_code(&self) -> StatusCode {
         match self {
+            Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::Unauthorized => StatusCode::UNAUTHORIZED,
+            Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Database(_) | Self::Migration(_) | Self::Redis(_) => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
-            Self::Config(_) | Self::Io(_) | Self::Server(_) | Self::Tracing(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            Self::Config(_)
+            | Self::Auth(_)
+            | Self::Io(_)
+            | Self::Server(_)
+            | Self::Internal(_)
+            | Self::Tracing(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
     fn code(&self) -> &'static str {
         match self {
+            Self::BadRequest(_) => "bad_request",
+            Self::Unauthorized => "unauthorized",
+            Self::Conflict(_) => "conflict",
             Self::Config(_) => "configuration_error",
+            Self::Auth(_) => "authentication_error",
             Self::Database(_) => "database_error",
             Self::Migration(_) => "migration_error",
             Self::Redis(_) => "redis_error",
             Self::Io(_) => "io_error",
             Self::Server(_) => "server_error",
+            Self::Internal(_) => "internal_error",
             Self::Tracing(_) => "tracing_error",
         }
     }
@@ -92,5 +118,13 @@ mod tests {
 
         assert_eq!(error.status_code(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(error.code(), "redis_error");
+    }
+
+    #[test]
+    fn unauthorized_errors_map_to_unauthorized() {
+        let error = AppError::Unauthorized;
+
+        assert_eq!(error.status_code(), StatusCode::UNAUTHORIZED);
+        assert_eq!(error.code(), "unauthorized");
     }
 }
