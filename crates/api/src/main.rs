@@ -6,6 +6,7 @@ use zeroclaw_core::{db, redis::RedisClient, Config, ServiceRole};
 mod auth;
 mod email;
 mod error;
+pub mod extractors;
 mod health;
 mod http;
 mod state;
