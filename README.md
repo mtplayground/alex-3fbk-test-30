@@ -20,16 +20,25 @@ cargo build
 
 ## Runtime configuration
 
-Both binaries read configuration from environment variables:
+Both binaries read configuration from environment variables. Copy
+`.env.example` for local development and provide real secrets through the
+environment in production.
 
 - `DATABASE_URL`: required PostgreSQL connection string
+- `REDIS_URL`: required Redis connection string
+- `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`: required S3-compatible object storage settings
+- `JWT_SECRET`: required signing secret
+- `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`: required email settings
+- `PUBLIC_BASE_URL`: required externally visible base URL
 - `HOST`: optional bind host, defaults to `0.0.0.0`
-- `PORT`: optional port, defaults to `8080` for the API
+- `PORT`: optional port, defaults to `8080` for the API and `0` for the worker
 - `SERVICE_NAME`: optional service label for logs
 
 Example:
 
 ```bash
-export DATABASE_URL=postgres://user:password@localhost:5432/zeroclaw
+set -a
+. ./.env.example
+set +a
 cargo run -p zeroclaw-api
 ```
