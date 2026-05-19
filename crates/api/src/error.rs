@@ -5,6 +5,8 @@ use serde::Serialize;
 use thiserror::Error;
 use zeroclaw_core::{auth::AuthError, ConfigError};
 
+use crate::email::EmailError;
+
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("bad request: {0}")]
@@ -21,6 +23,9 @@ pub enum AppError {
 
     #[error("authentication error: {0}")]
     Auth(#[from] AuthError),
+
+    #[error("email error: {0}")]
+    Email(#[from] EmailError),
 
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
@@ -55,6 +60,7 @@ impl AppError {
             }
             Self::Config(_)
             | Self::Auth(_)
+            | Self::Email(_)
             | Self::Io(_)
             | Self::Server(_)
             | Self::Internal(_)
@@ -69,6 +75,7 @@ impl AppError {
             Self::Conflict(_) => "conflict",
             Self::Config(_) => "configuration_error",
             Self::Auth(_) => "authentication_error",
+            Self::Email(_) => "email_error",
             Self::Database(_) => "database_error",
             Self::Migration(_) => "migration_error",
             Self::Redis(_) => "redis_error",

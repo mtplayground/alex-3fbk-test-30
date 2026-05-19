@@ -2,18 +2,24 @@ use axum::extract::State;
 use axum::http::header::{COOKIE, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::Json;
+use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::error::DatabaseError;
 use zeroclaw_core::auth::{self as core_auth, SignedToken};
-use zeroclaw_core::models::{CreateRefreshToken, CreateUser, User, UserId};
-use zeroclaw_core::repositories::{refresh_tokens, users};
+use zeroclaw_core::models::{
+    AuthTokenPurpose, CreateAuthToken, CreateRefreshToken, CreateUser, User, UserId,
+};
+use zeroclaw_core::repositories::{auth_tokens, refresh_tokens, users};
 
+use crate::email::send_email;
 use crate::error::AppError;
 use crate::state::AppState;
 
 const REFRESH_COOKIE_NAME: &str = "zc_refresh";
 const REFRESH_COOKIE_MAX_AGE_SECONDS: i64 = 60 * 60 * 24 * 30;
 const ACCESS_TOKEN_EXPIRES_IN_SECONDS: u64 = 60 * 15;
+const EMAIL_VERIFICATION_TTL_HOURS: i64 = 24;
+const PASSWORD_RESET_TTL_MINUTES: i64 = 60;
 
 #[derive(Debug, Deserialize)]
 pub struct SignupRequest {
@@ -26,6 +32,22 @@ pub struct SignupRequest {
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
     email: String,
+    password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VerifyEmailRequest {
+    token: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ForgotPasswordRequest {
+    email: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResetPasswordRequest {
+    token: String,
     password: String,
 }
 
@@ -94,6 +116,8 @@ pub async fn signup(
     };
 
     let tokens = issue_initial_tokens(&state, user.id()).await?;
+    send_verification_email(&state, &user).await?;
+
     let headers = refresh_cookie_headers(tokens.refresh_token.token())?;
     let response = AuthResponse {
         access_token: tokens.access_token.token().to_owned(),
@@ -186,6 +210,66 @@ pub async fn logout(
     Ok((StatusCode::NO_CONTENT, clear_refresh_cookie_headers()?))
 }
 
+pub async fn verify_email(
+    State(state): State<AppState>,
+    Json(payload): Json<VerifyEmailRequest>,
+) -> Result<StatusCode, AppError> {
+    require_non_empty("token", &payload.token)?;
+
+    let token_hash = core_auth::hash_opaque_token(&payload.token);
+    let Some(token) = auth_tokens::consume_active_by_hash(
+        state.db_pool(),
+        AuthTokenPurpose::EmailVerification,
+        &token_hash,
+    )
+    .await?
+    else {
+        return Err(AppError::Unauthorized);
+    };
+
+    users::mark_email_verified(state.db_pool(), token.user_id()).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn forgot_password(
+    State(state): State<AppState>,
+    Json(payload): Json<ForgotPasswordRequest>,
+) -> Result<StatusCode, AppError> {
+    require_non_empty("email", &payload.email)?;
+
+    if let Some(user) = users::find_by_email(state.db_pool(), &payload.email).await? {
+        send_password_reset_email(&state, &user).await?;
+    }
+
+    Ok(StatusCode::ACCEPTED)
+}
+
+pub async fn reset_password(
+    State(state): State<AppState>,
+    Json(payload): Json<ResetPasswordRequest>,
+) -> Result<StatusCode, AppError> {
+    require_non_empty("token", &payload.token)?;
+    validate_password(&payload.password)?;
+
+    let token_hash = core_auth::hash_opaque_token(&payload.token);
+    let Some(token) = auth_tokens::consume_active_by_hash(
+        state.db_pool(),
+        AuthTokenPurpose::PasswordReset,
+        &token_hash,
+    )
+    .await?
+    else {
+        return Err(AppError::Unauthorized);
+    };
+
+    let password_hash = core_auth::hash_password(&payload.password)?;
+    users::update_password_hash(state.db_pool(), token.user_id(), &password_hash).await?;
+    refresh_tokens::revoke_all_for_user(state.db_pool(), token.user_id()).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 struct IssuedTokens {
     access_token: SignedToken,
     refresh_token: SignedToken,
@@ -215,6 +299,84 @@ fn refresh_token_input(
     let expires_at = signed_token.claims().expires_at()?;
 
     Ok(CreateRefreshToken::new(user_id, token_jti, expires_at))
+}
+
+async fn send_verification_email(state: &AppState, user: &User) -> Result<(), AppError> {
+    let token = issue_auth_token(
+        state,
+        user.id(),
+        AuthTokenPurpose::EmailVerification,
+        Duration::hours(EMAIL_VERIFICATION_TTL_HOURS),
+    )
+    .await?;
+    let url = auth_flow_url(state.public_base_url(), "verify-email", &token);
+    let body = format!(
+        "Hello {},\n\nVerify your ZeroClaw email address by opening this link:\n\n{}\n\nThis link expires in {} hours.",
+        user.display_name(),
+        url,
+        EMAIL_VERIFICATION_TTL_HOURS
+    );
+
+    send_email(
+        state.smtp(),
+        user.email(),
+        "Verify your ZeroClaw email",
+        body,
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn send_password_reset_email(state: &AppState, user: &User) -> Result<(), AppError> {
+    let token = issue_auth_token(
+        state,
+        user.id(),
+        AuthTokenPurpose::PasswordReset,
+        Duration::minutes(PASSWORD_RESET_TTL_MINUTES),
+    )
+    .await?;
+    let url = auth_flow_url(state.public_base_url(), "reset-password", &token);
+    let body = format!(
+        "Hello {},\n\nReset your ZeroClaw password by opening this link:\n\n{}\n\nThis link expires in {} minutes. If you did not request it, you can ignore this email.",
+        user.display_name(),
+        url,
+        PASSWORD_RESET_TTL_MINUTES
+    );
+
+    send_email(
+        state.smtp(),
+        user.email(),
+        "Reset your ZeroClaw password",
+        body,
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn issue_auth_token(
+    state: &AppState,
+    user_id: UserId,
+    purpose: AuthTokenPurpose,
+    ttl: Duration,
+) -> Result<String, AppError> {
+    let token = core_auth::generate_opaque_token();
+    let token_hash = core_auth::hash_opaque_token(&token);
+    let input = CreateAuthToken::new(user_id, token_hash, purpose, Utc::now() + ttl);
+
+    auth_tokens::create(state.db_pool(), &input).await?;
+
+    Ok(token)
+}
+
+fn auth_flow_url(base_url: &str, path: &str, token: &str) -> String {
+    format!(
+        "{}/{}?token={}",
+        base_url.trim_end_matches('/'),
+        path,
+        token
+    )
 }
 
 fn validate_signup(payload: &SignupRequest) -> Result<(), AppError> {
@@ -308,5 +470,13 @@ mod tests {
         headers.insert(COOKIE, HeaderValue::from_static("theme=dark"));
 
         assert_eq!(refresh_cookie_value(&headers), None);
+    }
+
+    #[test]
+    fn auth_flow_url_trims_base_slash() {
+        assert_eq!(
+            auth_flow_url("https://example.com/", "reset-password", "token"),
+            "https://example.com/reset-password?token=token"
+        );
     }
 }

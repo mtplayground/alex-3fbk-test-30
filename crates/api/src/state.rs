@@ -1,20 +1,30 @@
 use redis::aio::ConnectionManager;
 use sqlx::PgPool;
-use zeroclaw_core::JwtConfig;
+use zeroclaw_core::{JwtConfig, SmtpConfig};
 
 #[derive(Clone)]
 pub struct AppState {
     db_pool: PgPool,
     redis_manager: ConnectionManager,
     jwt: JwtConfig,
+    smtp: SmtpConfig,
+    public_base_url: String,
 }
 
 impl AppState {
-    pub fn new(db_pool: PgPool, redis_manager: ConnectionManager, jwt: JwtConfig) -> Self {
+    pub fn new(
+        db_pool: PgPool,
+        redis_manager: ConnectionManager,
+        jwt: JwtConfig,
+        smtp: SmtpConfig,
+        public_base_url: String,
+    ) -> Self {
         Self {
             db_pool,
             redis_manager,
             jwt,
+            smtp,
+            public_base_url,
         }
     }
 
@@ -28,5 +38,13 @@ impl AppState {
 
     pub const fn jwt(&self) -> &JwtConfig {
         &self.jwt
+    }
+
+    pub const fn smtp(&self) -> &SmtpConfig {
+        &self.smtp
+    }
+
+    pub fn public_base_url(&self) -> &str {
+        &self.public_base_url
     }
 }

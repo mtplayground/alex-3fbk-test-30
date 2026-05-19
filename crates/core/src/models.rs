@@ -54,6 +54,55 @@ impl fmt::Display for RefreshTokenId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct AuthTokenId(Uuid);
+
+impl AuthTokenId {
+    pub fn new(value: Uuid) -> Self {
+        Self(value)
+    }
+
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+}
+
+impl From<Uuid> for AuthTokenId {
+    fn from(value: Uuid) -> Self {
+        Self::new(value)
+    }
+}
+
+impl fmt::Display for AuthTokenId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthTokenPurpose {
+    EmailVerification,
+    PasswordReset,
+}
+
+impl AuthTokenPurpose {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::EmailVerification => "email_verification",
+            Self::PasswordReset => "password_reset",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "email_verification" => Some(Self::EmailVerification),
+            "password_reset" => Some(Self::PasswordReset),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct User {
     id: UserId,
@@ -350,6 +399,107 @@ impl CreateRefreshToken {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthToken {
+    id: AuthTokenId,
+    user_id: UserId,
+    token_hash: String,
+    purpose: AuthTokenPurpose,
+    consumed_at: Option<DateTime<Utc>>,
+    expires_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
+}
+
+impl AuthToken {
+    pub fn new(
+        id: AuthTokenId,
+        user_id: UserId,
+        token_hash: String,
+        purpose: AuthTokenPurpose,
+        consumed_at: Option<DateTime<Utc>>,
+        expires_at: DateTime<Utc>,
+        created_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            id,
+            user_id,
+            token_hash,
+            purpose,
+            consumed_at,
+            expires_at,
+            created_at,
+        }
+    }
+
+    pub const fn id(&self) -> AuthTokenId {
+        self.id
+    }
+
+    pub const fn user_id(&self) -> UserId {
+        self.user_id
+    }
+
+    pub fn token_hash(&self) -> &str {
+        &self.token_hash
+    }
+
+    pub const fn purpose(&self) -> AuthTokenPurpose {
+        self.purpose
+    }
+
+    pub fn consumed_at(&self) -> Option<&DateTime<Utc>> {
+        self.consumed_at.as_ref()
+    }
+
+    pub const fn expires_at(&self) -> &DateTime<Utc> {
+        &self.expires_at
+    }
+
+    pub const fn created_at(&self) -> &DateTime<Utc> {
+        &self.created_at
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateAuthToken {
+    user_id: UserId,
+    token_hash: String,
+    purpose: AuthTokenPurpose,
+    expires_at: DateTime<Utc>,
+}
+
+impl CreateAuthToken {
+    pub fn new(
+        user_id: UserId,
+        token_hash: impl Into<String>,
+        purpose: AuthTokenPurpose,
+        expires_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            user_id,
+            token_hash: token_hash.into(),
+            purpose,
+            expires_at,
+        }
+    }
+
+    pub const fn user_id(&self) -> UserId {
+        self.user_id
+    }
+
+    pub fn token_hash(&self) -> &str {
+        &self.token_hash
+    }
+
+    pub const fn purpose(&self) -> AuthTokenPurpose {
+        self.purpose
+    }
+
+    pub const fn expires_at(&self) -> &DateTime<Utc> {
+        &self.expires_at
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceMetadata {
     pub name: String,
     pub version: String,
@@ -379,5 +529,18 @@ mod tests {
 
         assert_eq!(input.normalized_email(), "user@example.com");
         assert_eq!(input.normalized_handle(), "zeroclaw");
+    }
+
+    #[test]
+    fn auth_token_purpose_round_trips_storage_value() {
+        assert_eq!(
+            AuthTokenPurpose::from_str(AuthTokenPurpose::EmailVerification.as_str()),
+            Some(AuthTokenPurpose::EmailVerification)
+        );
+        assert_eq!(
+            AuthTokenPurpose::from_str(AuthTokenPurpose::PasswordReset.as_str()),
+            Some(AuthTokenPurpose::PasswordReset)
+        );
+        assert_eq!(AuthTokenPurpose::from_str("unknown"), None);
     }
 }

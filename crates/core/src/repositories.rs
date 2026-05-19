@@ -111,6 +111,65 @@ pub mod users {
         Ok(row.map(User::from))
     }
 
+    pub async fn mark_email_verified(pool: &PgPool, id: UserId) -> sqlx::Result<User> {
+        let row = sqlx::query_as::<_, UserRow>(
+            r#"
+            UPDATE users
+            SET email_verified_at = COALESCE(email_verified_at, now())
+            WHERE id = $1
+            RETURNING
+                id,
+                email,
+                handle,
+                password_hash,
+                display_name,
+                bio,
+                link,
+                avatar_key,
+                is_private,
+                email_verified_at,
+                created_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .fetch_one(pool)
+        .await?;
+
+        Ok(User::from(row))
+    }
+
+    pub async fn update_password_hash(
+        pool: &PgPool,
+        id: UserId,
+        password_hash: &str,
+    ) -> sqlx::Result<User> {
+        let row = sqlx::query_as::<_, UserRow>(
+            r#"
+            UPDATE users
+            SET password_hash = $2
+            WHERE id = $1
+            RETURNING
+                id,
+                email,
+                handle,
+                password_hash,
+                display_name,
+                bio,
+                link,
+                avatar_key,
+                is_private,
+                email_verified_at,
+                created_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(password_hash)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(User::from(row))
+    }
+
     const SELECT_USER_SQL_WITH_ID: &str = r#"
         SELECT
             id,
@@ -357,6 +416,22 @@ pub mod refresh_tokens {
         Ok(RefreshToken::from(row))
     }
 
+    pub async fn revoke_all_for_user(pool: &PgPool, user_id: UserId) -> sqlx::Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE refresh_tokens
+            SET revoked_at = COALESCE(revoked_at, now())
+            WHERE user_id = $1
+                AND revoked_at IS NULL
+            "#,
+        )
+        .bind(user_id.as_uuid())
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
     const SELECT_REFRESH_TOKEN_SQL_WITH_JTI: &str = r#"
         SELECT
             id,
@@ -387,4 +462,111 @@ pub mod refresh_tokens {
             AND revoked_at IS NULL
             AND expires_at > now()
     "#;
+}
+
+pub mod auth_tokens {
+    use chrono::{DateTime, Utc};
+    use sqlx::{FromRow, PgPool};
+    use uuid::Uuid;
+
+    use crate::models::{AuthToken, AuthTokenId, AuthTokenPurpose, CreateAuthToken, UserId};
+
+    #[derive(Debug, FromRow)]
+    struct AuthTokenRow {
+        id: Uuid,
+        user_id: Uuid,
+        token_hash: String,
+        purpose: String,
+        consumed_at: Option<DateTime<Utc>>,
+        expires_at: DateTime<Utc>,
+        created_at: DateTime<Utc>,
+    }
+
+    impl TryFrom<AuthTokenRow> for AuthToken {
+        type Error = sqlx::Error;
+
+        fn try_from(row: AuthTokenRow) -> Result<Self, Self::Error> {
+            let purpose = AuthTokenPurpose::from_str(&row.purpose).ok_or_else(|| {
+                sqlx::Error::ColumnDecode {
+                    index: "purpose".to_owned(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("unknown auth token purpose {:?}", row.purpose),
+                    )
+                    .into(),
+                }
+            })?;
+
+            Ok(Self::new(
+                AuthTokenId::from(row.id),
+                UserId::from(row.user_id),
+                row.token_hash,
+                purpose,
+                row.consumed_at,
+                row.expires_at,
+                row.created_at,
+            ))
+        }
+    }
+
+    pub async fn create(pool: &PgPool, input: &CreateAuthToken) -> sqlx::Result<AuthToken> {
+        let row = sqlx::query_as::<_, AuthTokenRow>(
+            r#"
+            INSERT INTO auth_tokens (
+                user_id,
+                token_hash,
+                purpose,
+                expires_at
+            )
+            VALUES ($1, $2, $3, $4)
+            RETURNING
+                id,
+                user_id,
+                token_hash,
+                purpose,
+                consumed_at,
+                expires_at,
+                created_at
+            "#,
+        )
+        .bind(input.user_id().as_uuid())
+        .bind(input.token_hash())
+        .bind(input.purpose().as_str())
+        .bind(input.expires_at())
+        .fetch_one(pool)
+        .await?;
+
+        AuthToken::try_from(row)
+    }
+
+    pub async fn consume_active_by_hash(
+        pool: &PgPool,
+        purpose: AuthTokenPurpose,
+        token_hash: &str,
+    ) -> sqlx::Result<Option<AuthToken>> {
+        let row = sqlx::query_as::<_, AuthTokenRow>(
+            r#"
+            UPDATE auth_tokens
+            SET consumed_at = now()
+            WHERE token_hash = $1
+                AND purpose = $2
+                AND consumed_at IS NULL
+                AND expires_at > now()
+            RETURNING
+                id,
+                user_id,
+                token_hash,
+                purpose,
+                consumed_at,
+                expires_at,
+                created_at
+            "#,
+        )
+        .bind(token_hash)
+        .bind(purpose.as_str())
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(AuthToken::try_from).transpose()
+    }
 }
