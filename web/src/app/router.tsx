@@ -11,10 +11,15 @@ import { NotFoundPage } from '../routes/NotFoundPage';
 import { PostPage } from '../routes/PostPage';
 import { ProfilePage } from '../routes/ProfilePage';
 import { ProfileSettingsPage } from '../routes/ProfileSettingsPage';
+import { ReelsPage } from '../routes/ReelsPage';
 import { ResetPasswordPage } from '../routes/ResetPasswordPage';
 import { SignupPage } from '../routes/SignupPage';
 
 export const router = createBrowserRouter([
+  {
+    element: <ProtectedRoute />,
+    children: [{ path: '/reels', element: <ReelsPage /> }],
+  },
   {
     path: '/',
     element: <RootLayout />,
