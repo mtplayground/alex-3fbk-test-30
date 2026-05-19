@@ -2,10 +2,11 @@ use std::process::ExitCode;
 
 use anyhow::{anyhow, Result};
 use tracing_subscriber::EnvFilter;
-use zeroclaw_core::{Config, ServiceRole};
+use zeroclaw_core::{db, Config, ServiceRole};
 
-fn main() -> ExitCode {
-    match run() {
+#[tokio::main]
+async fn main() -> ExitCode {
+    match run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("worker failed to start: {error}");
@@ -14,16 +15,19 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> Result<()> {
+async fn run() -> Result<()> {
     init_tracing()?;
 
     let config = Config::from_env(ServiceRole::Worker)?;
+    let pool = db::create_pool(&config).await?;
+
+    db::health_check(&pool).await?;
 
     tracing::info!(
         service = config.service_name(),
         role = ?config.role(),
         public_base_url = %config.public_base_url(),
-        "worker crate initialized"
+        "worker database pool initialized"
     );
 
     Ok(())
