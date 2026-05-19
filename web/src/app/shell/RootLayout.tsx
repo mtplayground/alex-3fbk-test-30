@@ -9,6 +9,7 @@ export function RootLayout() {
     { label: 'Explore', to: '/explore' },
     { label: 'Messages', to: '/dm' },
     { label: 'Profile', to: auth.user ? `/u/${auth.user.handle}` : '/login' },
+    { label: 'Settings', to: '/settings/profile' },
   ];
 
   return (
