@@ -55,6 +55,31 @@ Local ports default to API `8081`, web `8080`, and worker `0`. Override with
 The API binary starts an Axum server on `HOST:PORT` and exposes `GET /healthz`.
 Tracing is emitted as JSON through `tracing-subscriber`.
 
+### WebSocket Gateway
+
+Realtime clients connect to `GET /ws` with a valid access token. Browser clients
+should send `?token=<access-token>`; non-browser clients may use
+`Authorization: Bearer <access-token>`. Optional conversation subscriptions are
+passed as comma-separated UUIDs in `conversations`, for example:
+
+```text
+/ws?token=<access-token>&conversations=<conversation-id>,<conversation-id>
+```
+
+On connect the server validates the JWT, verifies the user still exists, and
+subscribes the connection to Redis fan-out channels:
+
+- `user:{user_id}`
+- `conversation:{conversation_id}` for every requested conversation
+
+The configured `REDIS_KEY_PREFIX` is applied to all channel names. Redis payloads
+are forwarded to the socket as text frames unchanged. The server sends a `ready`
+message after subscribing and then sends WebSocket ping frames plus a JSON
+`heartbeat` message every 30 seconds. Clients should reconnect with a refreshed
+access token and the same `conversations` parameter, using exponential backoff
+capped at 10 seconds. Clients may send `{"type":"ping"}` and will receive
+`{"type":"pong"}`.
+
 ## Database
 
 Database access is centralized in `zeroclaw-core::db`. The API initializes a

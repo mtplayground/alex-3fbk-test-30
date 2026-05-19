@@ -17,10 +17,12 @@ use crate::search::search;
 use crate::social::{toggle_comment_like, toggle_post_like, toggle_post_save};
 use crate::state::AppState;
 use crate::stories::{create_story, get_stories_feed, get_story_viewers, view_story};
+use crate::ws::websocket_handler;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/ws", get(websocket_handler))
         .route("/auth/signup", post(signup))
         .route("/auth/login", post(login))
         .route("/auth/refresh", post(refresh))
