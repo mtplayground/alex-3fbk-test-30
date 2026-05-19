@@ -1,8 +1,15 @@
 use std::process::ExitCode;
 
-use anyhow::{anyhow, Result};
 use tracing_subscriber::EnvFilter;
-use zeroclaw_core::{db, Config, ServiceRole};
+use zeroclaw_core::{db, redis::RedisClient, Config, ServiceRole};
+
+mod error;
+mod health;
+mod http;
+mod state;
+
+use crate::error::AppError;
+use crate::state::AppState;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -15,34 +22,43 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run() -> Result<()> {
+async fn run() -> Result<(), AppError> {
     init_tracing()?;
 
     let config = Config::from_env(ServiceRole::Api)?;
-    let pool = db::create_pool(&config).await?;
+    let bind_address = config.bind_address();
 
+    let pool = db::create_pool(&config).await?;
     db::run_migrations(&pool).await?;
-    db::health_check(&pool).await?;
+
+    let redis_client = RedisClient::new(&config)?;
+    let redis_manager = redis_client.connection_manager().await?;
+
+    let state = AppState::new(pool, redis_manager);
+    let router = http::router(state);
+    let listener = tokio::net::TcpListener::bind(&bind_address).await?;
 
     tracing::info!(
         service = config.service_name(),
-        role = ?config.role(),
-        bind_address = %config.bind_address(),
+        bind_address = %bind_address,
         public_base_url = %config.public_base_url(),
-        "api database pool initialized"
+        "api listening"
     );
+
+    axum::serve(listener, router).await?;
 
     Ok(())
 }
 
-fn init_tracing() -> Result<()> {
+fn init_tracing() -> Result<(), AppError> {
     let filter = match EnvFilter::try_from_default_env() {
         Ok(filter) => filter,
         Err(_) => EnvFilter::new("info"),
     };
 
     tracing_subscriber::fmt()
+        .json()
         .with_env_filter(filter)
         .try_init()
-        .map_err(|error| anyhow!("failed to initialize tracing: {error}"))
+        .map_err(|error| AppError::Tracing(error.to_string()))
 }

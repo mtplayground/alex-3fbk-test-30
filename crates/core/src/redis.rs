@@ -1,5 +1,5 @@
 use ::redis::aio::{ConnectionManager, PubSub};
-use ::redis::{AsyncCommands, RedisResult, ToRedisArgs};
+use ::redis::{AsyncCommands, ErrorKind, RedisError, RedisResult, ToRedisArgs};
 
 use crate::Config;
 
@@ -121,6 +121,19 @@ impl RedisClient {
 
         Ok(pubsub)
     }
+}
+
+pub async fn health_check(manager: &mut ConnectionManager) -> RedisResult<()> {
+    let response: String = ::redis::cmd("PING").query_async(manager).await?;
+
+    if response == "PONG" {
+        return Ok(());
+    }
+
+    Err(RedisError::from((
+        ErrorKind::ResponseError,
+        "unexpected Redis PING response",
+    )))
 }
 
 fn clean_segment(segment: &str) -> String {
