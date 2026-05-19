@@ -12,7 +12,9 @@ path = "src/lib.rs"
 
 [dependencies]
 aws-sdk-s3.workspace = true
+chrono.workspace = true
 redis.workspace = true
 serde.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
