@@ -197,4 +197,29 @@ mod tests {
         assert_eq!(key_part("/posts/:id/comments"), "_posts__id_comments");
         assert_eq!(key_part("2001:db8::1"), "2001_db8__1");
     }
+
+    #[test]
+    fn client_ip_prefers_edge_forwarded_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            axum::http::HeaderValue::from_static("203.0.113.10, 10.0.0.1"),
+        );
+        headers.insert(
+            "x-real-ip",
+            axum::http::HeaderValue::from_static("198.51.100.3"),
+        );
+        headers.insert(
+            "fly-client-ip",
+            axum::http::HeaderValue::from_static("192.0.2.7"),
+        );
+
+        assert_eq!(client_ip(&headers), "192.0.2.7");
+
+        headers.remove("fly-client-ip");
+        assert_eq!(client_ip(&headers), "198.51.100.3");
+
+        headers.remove("x-real-ip");
+        assert_eq!(client_ip(&headers), "203.0.113.10");
+    }
 }

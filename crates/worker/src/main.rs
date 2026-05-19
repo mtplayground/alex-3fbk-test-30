@@ -651,4 +651,51 @@ mod tests {
         assert!(playlist.contains("720p/index.m3u8"));
         assert!(playlist.contains("#EXT-X-STREAM-INF"));
     }
+
+    #[test]
+    fn image_variant_names_and_keys_are_stable() -> Result<()> {
+        let asset_id = zeroclaw_core::models::MediaAssetId::from(Uuid::new_v4());
+        let asset = MediaAsset::new(
+            asset_id,
+            zeroclaw_core::models::UserId::from(Uuid::new_v4()),
+            MediaKind::Image,
+            MediaAssetStatus::Uploaded,
+            "media/originals/test.jpg".to_owned(),
+            serde_json::json!({}),
+            None,
+            None,
+            None,
+            Utc::now(),
+            Utc::now(),
+        );
+        let image = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            320,
+            240,
+            image::Rgb([40, 120, 200]),
+        ));
+        let mut original = Vec::new();
+        let mut encoder = JpegEncoder::new_with_quality(&mut original, 90);
+        encoder.encode_image(&image)?;
+
+        let processed = build_image_variants(&asset, original)?;
+        assert_eq!(processed.variants[0].name, "thumb");
+        assert_eq!(
+            processed.variants[0].key,
+            format!("media/variants/{}/thumb.jpg", asset_id)
+        );
+        assert_eq!(processed.variants[1].name, "medium");
+        assert_eq!(
+            processed.variants[1].key,
+            format!("media/variants/{}/medium.jpg", asset_id)
+        );
+        assert_eq!(processed.variants[2].name, "large");
+        assert_eq!(
+            processed.variants[2].key,
+            format!("media/variants/{}/large.jpg", asset_id)
+        );
+        assert_eq!(processed.original_width, 320);
+        assert_eq!(processed.original_height, 240);
+
+        Ok(())
+    }
 }
