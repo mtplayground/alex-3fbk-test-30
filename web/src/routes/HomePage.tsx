@@ -1,3 +1,6 @@
+import { useAuth } from '../features/auth/AuthProvider';
+import { MediaUploader } from '../features/media/MediaUploader';
+
 const posts = [
   {
     id: 'sunrise-atelier',
@@ -20,6 +23,8 @@ const posts = [
 ];
 
 export function HomePage() {
+  const auth = useAuth();
+
   return (
     <div className="space-y-5">
       <div className="flex items-end justify-between gap-4">
@@ -28,6 +33,8 @@ export function HomePage() {
           <p className="mt-1 text-sm text-slate-600">Latest posts from followed accounts.</p>
         </div>
       </div>
+
+      {auth.isAuthenticated ? <MediaUploader surface="post" /> : null}
 
       <div className="grid gap-5">
         {posts.map((post) => (
