@@ -1170,6 +1170,19 @@ pub mod posts {
         pub position: i32,
     }
 
+    #[derive(Debug, Clone)]
+    pub struct FeedPost {
+        pub post: Post,
+        pub rank_score: f64,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct FeedCursor {
+        pub rank_score: f64,
+        pub created_at: DateTime<Utc>,
+        pub id: Uuid,
+    }
+
     pub struct CreatePost {
         pub author_id: UserId,
         pub caption: String,
@@ -1192,6 +1205,17 @@ pub mod posts {
         caption: String,
         location: Option<String>,
         created_at: DateTime<Utc>,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct FeedPostRow {
+        id: Uuid,
+        author_id: Uuid,
+        author_handle: String,
+        caption: String,
+        location: Option<String>,
+        created_at: DateTime<Utc>,
+        rank_score: f64,
     }
 
     #[derive(Debug, FromRow)]
@@ -1402,6 +1426,95 @@ pub mod posts {
         let mut posts = Vec::with_capacity(rows.len());
         for row in rows {
             posts.push(hydrate(pool, row).await?);
+        }
+
+        Ok(posts)
+    }
+
+    pub async fn list_home_feed(
+        pool: &PgPool,
+        user_id: UserId,
+        cursor: Option<FeedCursor>,
+        limit: i64,
+    ) -> sqlx::Result<Vec<FeedPost>> {
+        let rows = sqlx::query_as::<_, FeedPostRow>(
+            r#"
+            WITH feed_posts AS (
+                SELECT
+                    posts.id,
+                    posts.author_id,
+                    users.handle AS author_handle,
+                    posts.caption,
+                    posts.location,
+                    posts.created_at,
+                    (
+                        EXTRACT(EPOCH FROM posts.created_at)
+                        + COUNT(DISTINCT post_likes.user_id)::double precision * 120
+                        + COUNT(DISTINCT comments.id)::double precision * 90
+                        + COUNT(DISTINCT saves.user_id)::double precision * 150
+                    )::double precision AS rank_score
+                FROM posts
+                JOIN follows
+                    ON follows.followee_id = posts.author_id
+                    AND follows.follower_id = $1
+                    AND follows.state = 'accepted'
+                JOIN users ON users.id = posts.author_id
+                LEFT JOIN likes AS post_likes
+                    ON post_likes.target_kind = 'post'
+                    AND post_likes.target_id = posts.id
+                LEFT JOIN comments ON comments.post_id = posts.id
+                LEFT JOIN saves ON saves.post_id = posts.id
+                WHERE posts.deleted_at IS NULL
+                    AND posts.created_at >= now() - interval '7 days'
+                GROUP BY
+                    posts.id,
+                    posts.author_id,
+                    users.handle,
+                    posts.caption,
+                    posts.location,
+                    posts.created_at
+            )
+            SELECT
+                id,
+                author_id,
+                author_handle,
+                caption,
+                location,
+                created_at,
+                rank_score
+            FROM feed_posts
+            WHERE
+                $2::double precision IS NULL
+                OR rank_score < $2
+                OR (rank_score = $2 AND created_at < $3)
+                OR (rank_score = $2 AND created_at = $3 AND id < $4)
+            ORDER BY rank_score DESC, created_at DESC, id DESC
+            LIMIT $5
+            "#,
+        )
+        .bind(user_id.as_uuid())
+        .bind(cursor.map(|cursor| cursor.rank_score))
+        .bind(cursor.map(|cursor| cursor.created_at))
+        .bind(cursor.map(|cursor| cursor.id))
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+
+        let mut posts = Vec::with_capacity(rows.len());
+        for row in rows {
+            let rank_score = row.rank_score;
+            let post_row = PostRow {
+                id: row.id,
+                author_id: row.author_id,
+                author_handle: row.author_handle,
+                caption: row.caption,
+                location: row.location,
+                created_at: row.created_at,
+            };
+            posts.push(FeedPost {
+                post: hydrate(pool, post_row).await?,
+                rank_score,
+            });
         }
 
         Ok(posts)
