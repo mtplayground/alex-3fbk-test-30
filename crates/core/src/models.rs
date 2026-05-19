@@ -2,6 +2,7 @@ use std::fmt;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -80,6 +81,56 @@ impl fmt::Display for AuthTokenId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct MediaAssetId(Uuid);
+
+impl MediaAssetId {
+    pub fn new(value: Uuid) -> Self {
+        Self(value)
+    }
+
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+}
+
+impl From<Uuid> for MediaAssetId {
+    fn from(value: Uuid) -> Self {
+        Self::new(value)
+    }
+}
+
+impl fmt::Display for MediaAssetId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct MediaJobId(Uuid);
+
+impl MediaJobId {
+    pub fn new(value: Uuid) -> Self {
+        Self(value)
+    }
+
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+}
+
+impl From<Uuid> for MediaJobId {
+    fn from(value: Uuid) -> Self {
+        Self::new(value)
+    }
+}
+
+impl fmt::Display for MediaJobId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthTokenPurpose {
     EmailVerification,
@@ -98,6 +149,117 @@ impl AuthTokenPurpose {
         match value {
             "email_verification" => Some(Self::EmailVerification),
             "password_reset" => Some(Self::PasswordReset),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaKind {
+    Image,
+    Video,
+}
+
+impl MediaKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Video => "video",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "image" => Some(Self::Image),
+            "video" => Some(Self::Video),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaAssetStatus {
+    Pending,
+    Uploaded,
+    Processing,
+    Ready,
+    Failed,
+}
+
+impl MediaAssetStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Uploaded => "uploaded",
+            Self::Processing => "processing",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "uploaded" => Some(Self::Uploaded),
+            "processing" => Some(Self::Processing),
+            "ready" => Some(Self::Ready),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaJobKind {
+    ImageProcessing,
+    VideoProcessing,
+}
+
+impl MediaJobKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ImageProcessing => "image_processing",
+            Self::VideoProcessing => "video_processing",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "image_processing" => Some(Self::ImageProcessing),
+            "video_processing" => Some(Self::VideoProcessing),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaJobStatus {
+    Queued,
+    Running,
+    Succeeded,
+    Failed,
+}
+
+impl MediaJobStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "queued" => Some(Self::Queued),
+            "running" => Some(Self::Running),
+            "succeeded" => Some(Self::Succeeded),
+            "failed" => Some(Self::Failed),
             _ => None,
         }
     }
@@ -549,6 +711,258 @@ impl CreateAuthToken {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MediaAsset {
+    id: MediaAssetId,
+    owner_id: UserId,
+    kind: MediaKind,
+    status: MediaAssetStatus,
+    original_key: String,
+    variants: Value,
+    duration_ms: Option<i64>,
+    width: Option<i32>,
+    height: Option<i32>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl MediaAsset {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: MediaAssetId,
+        owner_id: UserId,
+        kind: MediaKind,
+        status: MediaAssetStatus,
+        original_key: String,
+        variants: Value,
+        duration_ms: Option<i64>,
+        width: Option<i32>,
+        height: Option<i32>,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            id,
+            owner_id,
+            kind,
+            status,
+            original_key,
+            variants,
+            duration_ms,
+            width,
+            height,
+            created_at,
+            updated_at,
+        }
+    }
+
+    pub const fn id(&self) -> MediaAssetId {
+        self.id
+    }
+
+    pub const fn owner_id(&self) -> UserId {
+        self.owner_id
+    }
+
+    pub const fn kind(&self) -> MediaKind {
+        self.kind
+    }
+
+    pub const fn status(&self) -> MediaAssetStatus {
+        self.status
+    }
+
+    pub fn original_key(&self) -> &str {
+        &self.original_key
+    }
+
+    pub const fn variants(&self) -> &Value {
+        &self.variants
+    }
+
+    pub const fn duration_ms(&self) -> Option<i64> {
+        self.duration_ms
+    }
+
+    pub const fn width(&self) -> Option<i32> {
+        self.width
+    }
+
+    pub const fn height(&self) -> Option<i32> {
+        self.height
+    }
+
+    pub const fn created_at(&self) -> &DateTime<Utc> {
+        &self.created_at
+    }
+
+    pub const fn updated_at(&self) -> &DateTime<Utc> {
+        &self.updated_at
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateMediaAsset {
+    owner_id: UserId,
+    kind: MediaKind,
+    original_key: String,
+    variants: Value,
+}
+
+impl CreateMediaAsset {
+    pub fn new(owner_id: UserId, kind: MediaKind, original_key: impl Into<String>) -> Self {
+        Self {
+            owner_id,
+            kind,
+            original_key: original_key.into(),
+            variants: Value::Object(Default::default()),
+        }
+    }
+
+    pub fn with_variants(mut self, variants: Value) -> Self {
+        self.variants = variants;
+        self
+    }
+
+    pub const fn owner_id(&self) -> UserId {
+        self.owner_id
+    }
+
+    pub const fn kind(&self) -> MediaKind {
+        self.kind
+    }
+
+    pub fn original_key(&self) -> &str {
+        &self.original_key
+    }
+
+    pub const fn variants(&self) -> &Value {
+        &self.variants
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MediaJob {
+    id: MediaJobId,
+    asset_id: MediaAssetId,
+    kind: MediaJobKind,
+    status: MediaJobStatus,
+    payload: Value,
+    attempts: i32,
+    max_attempts: i32,
+    run_after: DateTime<Utc>,
+    locked_at: Option<DateTime<Utc>>,
+    locked_by: Option<String>,
+    last_error: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl MediaJob {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: MediaJobId,
+        asset_id: MediaAssetId,
+        kind: MediaJobKind,
+        status: MediaJobStatus,
+        payload: Value,
+        attempts: i32,
+        max_attempts: i32,
+        run_after: DateTime<Utc>,
+        locked_at: Option<DateTime<Utc>>,
+        locked_by: Option<String>,
+        last_error: Option<String>,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            id,
+            asset_id,
+            kind,
+            status,
+            payload,
+            attempts,
+            max_attempts,
+            run_after,
+            locked_at,
+            locked_by,
+            last_error,
+            created_at,
+            updated_at,
+        }
+    }
+
+    pub const fn id(&self) -> MediaJobId {
+        self.id
+    }
+
+    pub const fn asset_id(&self) -> MediaAssetId {
+        self.asset_id
+    }
+
+    pub const fn kind(&self) -> MediaJobKind {
+        self.kind
+    }
+
+    pub const fn status(&self) -> MediaJobStatus {
+        self.status
+    }
+
+    pub const fn payload(&self) -> &Value {
+        &self.payload
+    }
+
+    pub const fn attempts(&self) -> i32 {
+        self.attempts
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateMediaJob {
+    asset_id: MediaAssetId,
+    kind: MediaJobKind,
+    payload: Value,
+    max_attempts: i32,
+    run_after: Option<DateTime<Utc>>,
+}
+
+impl CreateMediaJob {
+    pub fn new(asset_id: MediaAssetId, kind: MediaJobKind) -> Self {
+        Self {
+            asset_id,
+            kind,
+            payload: Value::Object(Default::default()),
+            max_attempts: 3,
+            run_after: None,
+        }
+    }
+
+    pub fn with_payload(mut self, payload: Value) -> Self {
+        self.payload = payload;
+        self
+    }
+
+    pub const fn asset_id(&self) -> MediaAssetId {
+        self.asset_id
+    }
+
+    pub const fn kind(&self) -> MediaJobKind {
+        self.kind
+    }
+
+    pub const fn payload(&self) -> &Value {
+        &self.payload
+    }
+
+    pub const fn max_attempts(&self) -> i32 {
+        self.max_attempts
+    }
+
+    pub const fn run_after(&self) -> Option<&DateTime<Utc>> {
+        self.run_after.as_ref()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceMetadata {
     pub name: String,
@@ -592,5 +1006,18 @@ mod tests {
             Some(AuthTokenPurpose::PasswordReset)
         );
         assert_eq!(AuthTokenPurpose::from_str("unknown"), None);
+    }
+
+    #[test]
+    fn media_kind_round_trips_storage_value() {
+        assert_eq!(
+            MediaKind::from_str(MediaKind::Image.as_str()),
+            Some(MediaKind::Image)
+        );
+        assert_eq!(
+            MediaKind::from_str(MediaKind::Video.as_str()),
+            Some(MediaKind::Video)
+        );
+        assert_eq!(MediaKind::from_str("audio"), None);
     }
 }

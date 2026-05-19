@@ -3607,6 +3607,7 @@ dependencies = [
  "rand_core 0.6.4",
  "redis",
  "serde",
+ "serde_json",
  "sha2",
  "sqlx",
  "thiserror 1.0.69",
