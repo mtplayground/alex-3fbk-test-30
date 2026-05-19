@@ -1130,3 +1130,364 @@ pub mod media {
         }
     }
 }
+
+pub mod posts {
+    use chrono::{DateTime, Utc};
+    use sqlx::{FromRow, PgPool, Row};
+    use uuid::Uuid;
+
+    use crate::models::UserId;
+
+    #[derive(Debug, Clone)]
+    pub struct Post {
+        pub id: Uuid,
+        pub author_id: UserId,
+        pub author_handle: String,
+        pub caption: String,
+        pub location: Option<String>,
+        pub created_at: DateTime<Utc>,
+        pub media: Vec<PostMedia>,
+        pub hashtags: Vec<String>,
+        pub mentions: Vec<PostMention>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct PostMedia {
+        pub media_id: Uuid,
+        pub position: i32,
+        pub kind: String,
+        pub original_key: String,
+        pub variants: serde_json::Value,
+        pub width: Option<i32>,
+        pub height: Option<i32>,
+        pub duration_ms: Option<i64>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct PostMention {
+        pub user_id: UserId,
+        pub handle: String,
+        pub position: i32,
+    }
+
+    pub struct CreatePost {
+        pub author_id: UserId,
+        pub caption: String,
+        pub location: Option<String>,
+        pub media_ids: Vec<Uuid>,
+        pub hashtags: Vec<String>,
+        pub mentions: Vec<ParsedMention>,
+    }
+
+    pub struct ParsedMention {
+        pub handle: String,
+        pub position: i32,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct PostRow {
+        id: Uuid,
+        author_id: Uuid,
+        author_handle: String,
+        caption: String,
+        location: Option<String>,
+        created_at: DateTime<Utc>,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct PostMediaRow {
+        media_id: Uuid,
+        position: i32,
+        kind: String,
+        original_key: String,
+        variants: sqlx::types::Json<serde_json::Value>,
+        width: Option<i32>,
+        height: Option<i32>,
+        duration_ms: Option<i64>,
+    }
+
+    #[derive(Debug, FromRow)]
+    struct PostMentionRow {
+        user_id: Uuid,
+        handle: String,
+        position: i32,
+    }
+
+    impl From<PostMediaRow> for PostMedia {
+        fn from(row: PostMediaRow) -> Self {
+            Self {
+                media_id: row.media_id,
+                position: row.position,
+                kind: row.kind,
+                original_key: row.original_key,
+                variants: row.variants.0,
+                width: row.width,
+                height: row.height,
+                duration_ms: row.duration_ms,
+            }
+        }
+    }
+
+    impl From<PostMentionRow> for PostMention {
+        fn from(row: PostMentionRow) -> Self {
+            Self {
+                user_id: UserId::from(row.user_id),
+                handle: row.handle,
+                position: row.position,
+            }
+        }
+    }
+
+    pub async fn create(pool: &PgPool, input: &CreatePost) -> sqlx::Result<Post> {
+        let mut tx = pool.begin().await?;
+
+        let usable_media_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM media_assets
+            WHERE owner_id = $1
+                AND id = ANY($2)
+                AND status IN ('uploaded', 'processing', 'ready')
+            "#,
+        )
+        .bind(input.author_id.as_uuid())
+        .bind(&input.media_ids)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        if usable_media_count != input.media_ids.len() as i64 {
+            return Err(sqlx::Error::RowNotFound);
+        }
+
+        let post_id: Uuid = sqlx::query_scalar(
+            r#"
+            INSERT INTO posts (author_id, caption, location)
+            VALUES ($1, $2, $3)
+            RETURNING id
+            "#,
+        )
+        .bind(input.author_id.as_uuid())
+        .bind(input.caption.trim())
+        .bind(input.location.as_deref())
+        .fetch_one(&mut *tx)
+        .await?;
+
+        for (position, media_id) in input.media_ids.iter().enumerate() {
+            sqlx::query(
+                r#"
+                INSERT INTO post_media (post_id, media_id, position)
+                VALUES ($1, $2, $3)
+                "#,
+            )
+            .bind(post_id)
+            .bind(media_id)
+            .bind(position as i32)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        for hashtag in &input.hashtags {
+            let hashtag_id: Uuid = sqlx::query_scalar(
+                r#"
+                INSERT INTO hashtags (name)
+                VALUES ($1)
+                ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+                RETURNING id
+                "#,
+            )
+            .bind(hashtag)
+            .fetch_one(&mut *tx)
+            .await?;
+
+            sqlx::query(
+                r#"
+                INSERT INTO post_hashtags (post_id, hashtag_id)
+                VALUES ($1, $2)
+                ON CONFLICT DO NOTHING
+                "#,
+            )
+            .bind(post_id)
+            .bind(hashtag_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        for mention in &input.mentions {
+            if let Some(row) = sqlx::query("SELECT id, handle FROM users WHERE handle = $1")
+                .bind(&mention.handle)
+                .fetch_optional(&mut *tx)
+                .await?
+            {
+                let user_id: Uuid = row.try_get("id")?;
+                let handle: String = row.try_get("handle")?;
+                sqlx::query(
+                    r#"
+                    INSERT INTO mentions (post_id, mentioned_user_id, handle, position)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT DO NOTHING
+                    "#,
+                )
+                .bind(post_id)
+                .bind(user_id)
+                .bind(handle)
+                .bind(mention.position)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+
+        tx.commit().await?;
+
+        find_by_id(pool, post_id)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)
+    }
+
+    pub async fn find_by_id(pool: &PgPool, id: Uuid) -> sqlx::Result<Option<Post>> {
+        let Some(row) = sqlx::query_as::<_, PostRow>(
+            r#"
+            SELECT
+                posts.id,
+                posts.author_id,
+                users.handle AS author_handle,
+                posts.caption,
+                posts.location,
+                posts.created_at
+            FROM posts
+            JOIN users ON users.id = posts.author_id
+            WHERE posts.id = $1
+                AND posts.deleted_at IS NULL
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        else {
+            return Ok(None);
+        };
+
+        hydrate(pool, row).await.map(Some)
+    }
+
+    pub async fn list_by_author(
+        pool: &PgPool,
+        author_id: UserId,
+        before: Option<DateTime<Utc>>,
+        limit: i64,
+    ) -> sqlx::Result<Vec<Post>> {
+        let rows = sqlx::query_as::<_, PostRow>(
+            r#"
+            SELECT
+                posts.id,
+                posts.author_id,
+                users.handle AS author_handle,
+                posts.caption,
+                posts.location,
+                posts.created_at
+            FROM posts
+            JOIN users ON users.id = posts.author_id
+            WHERE posts.author_id = $1
+                AND posts.deleted_at IS NULL
+                AND ($2::timestamptz IS NULL OR posts.created_at < $2)
+            ORDER BY posts.created_at DESC
+            LIMIT $3
+            "#,
+        )
+        .bind(author_id.as_uuid())
+        .bind(before)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+
+        let mut posts = Vec::with_capacity(rows.len());
+        for row in rows {
+            posts.push(hydrate(pool, row).await?);
+        }
+
+        Ok(posts)
+    }
+
+    pub async fn soft_delete(pool: &PgPool, id: Uuid, author_id: UserId) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE posts
+            SET deleted_at = now()
+            WHERE id = $1
+                AND author_id = $2
+                AND deleted_at IS NULL
+            "#,
+        )
+        .bind(id)
+        .bind(author_id.as_uuid())
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn hydrate(pool: &PgPool, row: PostRow) -> sqlx::Result<Post> {
+        let media = sqlx::query_as::<_, PostMediaRow>(
+            r#"
+            SELECT
+                media_assets.id AS media_id,
+                post_media.position,
+                media_assets.kind,
+                media_assets.original_key,
+                media_assets.variants,
+                media_assets.width,
+                media_assets.height,
+                media_assets.duration_ms
+            FROM post_media
+            JOIN media_assets ON media_assets.id = post_media.media_id
+            WHERE post_media.post_id = $1
+            ORDER BY post_media.position ASC
+            "#,
+        )
+        .bind(row.id)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(PostMedia::from)
+        .collect();
+
+        let hashtags = sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT hashtags.name
+            FROM post_hashtags
+            JOIN hashtags ON hashtags.id = post_hashtags.hashtag_id
+            WHERE post_hashtags.post_id = $1
+            ORDER BY hashtags.name ASC
+            "#,
+        )
+        .bind(row.id)
+        .fetch_all(pool)
+        .await?;
+
+        let mentions = sqlx::query_as::<_, PostMentionRow>(
+            r#"
+            SELECT mentioned_user_id AS user_id, handle, position
+            FROM mentions
+            WHERE post_id = $1
+            ORDER BY position ASC
+            "#,
+        )
+        .bind(row.id)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(PostMention::from)
+        .collect();
+
+        Ok(Post {
+            id: row.id,
+            author_id: UserId::from(row.author_id),
+            author_handle: row.author_handle,
+            caption: row.caption,
+            location: row.location,
+            created_at: row.created_at,
+            media,
+            hashtags,
+            mentions,
+        })
+    }
+}
