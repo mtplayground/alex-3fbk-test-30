@@ -15,6 +15,7 @@ use crate::profile::{create_avatar_upload, get_user_profile, update_me};
 use crate::search::search;
 use crate::social::{toggle_comment_like, toggle_post_like, toggle_post_save};
 use crate::state::AppState;
+use crate::stories::{create_story, get_stories_feed, get_story_viewers, view_story};
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -31,6 +32,10 @@ pub fn router(state: AppState) -> Router {
         .route("/explore", get(get_explore))
         .route("/feed", get(get_feed))
         .route("/search", get(search))
+        .route("/stories", post(create_story))
+        .route("/stories/feed", get(get_stories_feed))
+        .route("/stories/:id/view", post(view_story))
+        .route("/stories/:id/viewers", get(get_story_viewers))
         .route("/posts", post(create_post))
         .route("/posts/:id", get(get_post).delete(delete_post))
         .route("/posts/:id/like", post(toggle_post_like))

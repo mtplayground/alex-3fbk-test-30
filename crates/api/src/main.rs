@@ -18,6 +18,7 @@ mod profile;
 mod search;
 mod social;
 mod state;
+mod stories;
 
 use crate::error::AppError;
 use crate::state::AppState;
