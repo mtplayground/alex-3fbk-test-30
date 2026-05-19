@@ -849,6 +849,47 @@ pub mod media {
         MediaAsset::try_from(row)
     }
 
+    pub async fn update_asset_processing_result(
+        pool: &PgPool,
+        id: MediaAssetId,
+        variants: Value,
+        width: i32,
+        height: i32,
+    ) -> sqlx::Result<MediaAsset> {
+        let row = sqlx::query_as::<_, MediaAssetRow>(
+            r#"
+            UPDATE media_assets
+            SET
+                status = 'ready',
+                variants = $2,
+                width = $3,
+                height = $4,
+                updated_at = now()
+            WHERE id = $1
+            RETURNING
+                id,
+                owner_id,
+                kind,
+                status,
+                original_key,
+                variants,
+                duration_ms,
+                width,
+                height,
+                created_at,
+                updated_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(Json(variants))
+        .bind(width)
+        .bind(height)
+        .fetch_one(pool)
+        .await?;
+
+        MediaAsset::try_from(row)
+    }
+
     pub async fn enqueue_job(pool: &PgPool, input: &CreateMediaJob) -> sqlx::Result<MediaJob> {
         let row = sqlx::query_as::<_, MediaJobRow>(
             r#"
