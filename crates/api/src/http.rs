@@ -12,6 +12,7 @@ use crate::health::healthz;
 use crate::media::{complete_upload, create_upload};
 use crate::posts::{create_post, delete_post, get_explore, get_feed, get_post, get_user_posts};
 use crate::profile::{create_avatar_upload, get_user_profile, update_me};
+use crate::reels::{create_reel, get_reel, get_reels_feed};
 use crate::search::search;
 use crate::social::{toggle_comment_like, toggle_post_like, toggle_post_save};
 use crate::state::AppState;
@@ -36,6 +37,9 @@ pub fn router(state: AppState) -> Router {
         .route("/stories/feed", get(get_stories_feed))
         .route("/stories/:id/view", post(view_story))
         .route("/stories/:id/viewers", get(get_story_viewers))
+        .route("/reels", post(create_reel))
+        .route("/reels/feed", get(get_reels_feed))
+        .route("/reels/:id", get(get_reel))
         .route("/posts", post(create_post))
         .route("/posts/:id", get(get_post).delete(delete_post))
         .route("/posts/:id/like", post(toggle_post_like))
