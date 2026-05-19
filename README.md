@@ -26,6 +26,18 @@ npm install
 npm run build
 ```
 
+End-to-end browser tests live in `web/e2e`:
+
+```bash
+cd web
+npm run test:e2e
+```
+
+The default Playwright suite uses mocked API responses for deterministic UI
+coverage. Set `ZEROCLAW_E2E_LIVE=1` and provide a disposable
+`TEST_DATABASE_URL` plus the normal runtime service variables to start the API,
+worker, and web server together through `scripts/e2e.sh`.
+
 ## Local Development
 
 Create `.env` from `.env.example`, replace every secret and service URL, then
