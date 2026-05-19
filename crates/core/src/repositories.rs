@@ -645,3 +645,320 @@ pub mod auth_tokens {
         row.map(AuthToken::try_from).transpose()
     }
 }
+
+pub mod media {
+    use chrono::{DateTime, Utc};
+    use serde_json::Value;
+    use sqlx::types::Json;
+    use sqlx::{FromRow, PgPool};
+    use uuid::Uuid;
+
+    use crate::models::{
+        CreateMediaAsset, CreateMediaJob, MediaAsset, MediaAssetId, MediaAssetStatus, MediaJob,
+        MediaJobId, MediaJobKind, MediaJobStatus, MediaKind, UserId,
+    };
+
+    #[derive(Debug, FromRow)]
+    struct MediaAssetRow {
+        id: Uuid,
+        owner_id: Uuid,
+        kind: String,
+        status: String,
+        original_key: String,
+        variants: Json<Value>,
+        duration_ms: Option<i64>,
+        width: Option<i32>,
+        height: Option<i32>,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    }
+
+    impl TryFrom<MediaAssetRow> for MediaAsset {
+        type Error = sqlx::Error;
+
+        fn try_from(row: MediaAssetRow) -> Result<Self, Self::Error> {
+            let kind = MediaKind::from_str(&row.kind).ok_or_else(|| {
+                decode_error("kind", format!("unknown media kind {:?}", row.kind))
+            })?;
+            let status = MediaAssetStatus::from_str(&row.status).ok_or_else(|| {
+                decode_error(
+                    "status",
+                    format!("unknown media asset status {:?}", row.status),
+                )
+            })?;
+
+            Ok(Self::new(
+                MediaAssetId::from(row.id),
+                UserId::from(row.owner_id),
+                kind,
+                status,
+                row.original_key,
+                row.variants.0,
+                row.duration_ms,
+                row.width,
+                row.height,
+                row.created_at,
+                row.updated_at,
+            ))
+        }
+    }
+
+    #[derive(Debug, FromRow)]
+    struct MediaJobRow {
+        id: Uuid,
+        asset_id: Uuid,
+        kind: String,
+        status: String,
+        payload: Json<Value>,
+        attempts: i32,
+        max_attempts: i32,
+        run_after: DateTime<Utc>,
+        locked_at: Option<DateTime<Utc>>,
+        locked_by: Option<String>,
+        last_error: Option<String>,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    }
+
+    impl TryFrom<MediaJobRow> for MediaJob {
+        type Error = sqlx::Error;
+
+        fn try_from(row: MediaJobRow) -> Result<Self, Self::Error> {
+            let kind = MediaJobKind::from_str(&row.kind).ok_or_else(|| {
+                decode_error("kind", format!("unknown media job kind {:?}", row.kind))
+            })?;
+            let status = MediaJobStatus::from_str(&row.status).ok_or_else(|| {
+                decode_error(
+                    "status",
+                    format!("unknown media job status {:?}", row.status),
+                )
+            })?;
+
+            Ok(Self::new(
+                MediaJobId::from(row.id),
+                MediaAssetId::from(row.asset_id),
+                kind,
+                status,
+                row.payload.0,
+                row.attempts,
+                row.max_attempts,
+                row.run_after,
+                row.locked_at,
+                row.locked_by,
+                row.last_error,
+                row.created_at,
+                row.updated_at,
+            ))
+        }
+    }
+
+    pub async fn create_asset(pool: &PgPool, input: &CreateMediaAsset) -> sqlx::Result<MediaAsset> {
+        let row = sqlx::query_as::<_, MediaAssetRow>(
+            r#"
+            INSERT INTO media_assets (
+                owner_id,
+                kind,
+                original_key,
+                variants
+            )
+            VALUES ($1, $2, $3, $4)
+            RETURNING
+                id,
+                owner_id,
+                kind,
+                status,
+                original_key,
+                variants,
+                duration_ms,
+                width,
+                height,
+                created_at,
+                updated_at
+            "#,
+        )
+        .bind(input.owner_id().as_uuid())
+        .bind(input.kind().as_str())
+        .bind(input.original_key())
+        .bind(Json(input.variants().clone()))
+        .fetch_one(pool)
+        .await?;
+
+        MediaAsset::try_from(row)
+    }
+
+    pub async fn update_asset_status(
+        pool: &PgPool,
+        id: MediaAssetId,
+        status: MediaAssetStatus,
+    ) -> sqlx::Result<MediaAsset> {
+        let row = sqlx::query_as::<_, MediaAssetRow>(
+            r#"
+            UPDATE media_assets
+            SET
+                status = $2,
+                updated_at = now()
+            WHERE id = $1
+            RETURNING
+                id,
+                owner_id,
+                kind,
+                status,
+                original_key,
+                variants,
+                duration_ms,
+                width,
+                height,
+                created_at,
+                updated_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(status.as_str())
+        .fetch_one(pool)
+        .await?;
+
+        MediaAsset::try_from(row)
+    }
+
+    pub async fn enqueue_job(pool: &PgPool, input: &CreateMediaJob) -> sqlx::Result<MediaJob> {
+        let row = sqlx::query_as::<_, MediaJobRow>(
+            r#"
+            INSERT INTO media_jobs (
+                asset_id,
+                kind,
+                payload,
+                max_attempts,
+                run_after
+            )
+            VALUES ($1, $2, $3, $4, COALESCE($5, now()))
+            RETURNING
+                id,
+                asset_id,
+                kind,
+                status,
+                payload,
+                attempts,
+                max_attempts,
+                run_after,
+                locked_at,
+                locked_by,
+                last_error,
+                created_at,
+                updated_at
+            "#,
+        )
+        .bind(input.asset_id().as_uuid())
+        .bind(input.kind().as_str())
+        .bind(Json(input.payload().clone()))
+        .bind(input.max_attempts())
+        .bind(input.run_after())
+        .fetch_one(pool)
+        .await?;
+
+        MediaJob::try_from(row)
+    }
+
+    pub async fn claim_next_job(pool: &PgPool, worker_id: &str) -> sqlx::Result<Option<MediaJob>> {
+        let row = sqlx::query_as::<_, MediaJobRow>(
+            r#"
+            WITH next_job AS (
+                SELECT id
+                FROM media_jobs
+                WHERE status = 'queued'
+                    AND run_after <= now()
+                    AND attempts < max_attempts
+                ORDER BY run_after ASC, created_at ASC
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+            )
+            UPDATE media_jobs
+            SET
+                status = 'running',
+                attempts = attempts + 1,
+                locked_at = now(),
+                locked_by = $1,
+                updated_at = now()
+            WHERE id = (SELECT id FROM next_job)
+            RETURNING
+                id,
+                asset_id,
+                kind,
+                status,
+                payload,
+                attempts,
+                max_attempts,
+                run_after,
+                locked_at,
+                locked_by,
+                last_error,
+                created_at,
+                updated_at
+            "#,
+        )
+        .bind(worker_id)
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(MediaJob::try_from).transpose()
+    }
+
+    pub async fn mark_job_succeeded(pool: &PgPool, id: MediaJobId) -> sqlx::Result<MediaJob> {
+        update_job_terminal_status(pool, id, MediaJobStatus::Succeeded, None).await
+    }
+
+    pub async fn mark_job_failed(
+        pool: &PgPool,
+        id: MediaJobId,
+        error: &str,
+    ) -> sqlx::Result<MediaJob> {
+        update_job_terminal_status(pool, id, MediaJobStatus::Failed, Some(error)).await
+    }
+
+    async fn update_job_terminal_status(
+        pool: &PgPool,
+        id: MediaJobId,
+        status: MediaJobStatus,
+        error: Option<&str>,
+    ) -> sqlx::Result<MediaJob> {
+        let row = sqlx::query_as::<_, MediaJobRow>(
+            r#"
+            UPDATE media_jobs
+            SET
+                status = $2,
+                locked_at = NULL,
+                locked_by = NULL,
+                last_error = $3,
+                updated_at = now()
+            WHERE id = $1
+            RETURNING
+                id,
+                asset_id,
+                kind,
+                status,
+                payload,
+                attempts,
+                max_attempts,
+                run_after,
+                locked_at,
+                locked_by,
+                last_error,
+                created_at,
+                updated_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(status.as_str())
+        .bind(error)
+        .fetch_one(pool)
+        .await?;
+
+        MediaJob::try_from(row)
+    }
+
+    fn decode_error(column: &'static str, message: String) -> sqlx::Error {
+        sqlx::Error::ColumnDecode {
+            index: column.to_owned(),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, message).into(),
+        }
+    }
+}
