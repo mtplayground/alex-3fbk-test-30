@@ -3,17 +3,36 @@ use std::time::Duration as StdDuration;
 
 use anyhow::{anyhow, Result};
 use chrono::{Duration as ChronoDuration, Utc};
+use image::codecs::jpeg::JpegEncoder;
+use image::imageops::FilterType;
+use image::GenericImageView;
+use serde_json::{json, Map, Value};
 use sqlx::postgres::PgListener;
 use sqlx::PgPool;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
-use zeroclaw_core::models::{MediaJob, MediaJobKind};
+use zeroclaw_core::models::{MediaAsset, MediaAssetStatus, MediaJob, MediaJobKind, MediaKind};
 use zeroclaw_core::repositories::media;
+use zeroclaw_core::storage::ObjectStorage;
 use zeroclaw_core::{db, Config, ServiceRole};
 
 const MEDIA_JOBS_CHANNEL: &str = "media_jobs";
 const IDLE_POLL_INTERVAL: StdDuration = StdDuration::from_secs(10);
 const MAX_JOBS_PER_WAKE: usize = 25;
+const IMAGE_VARIANTS: [ImageVariantSpec; 3] = [
+    ImageVariantSpec {
+        name: "thumb",
+        max_dimension: 240,
+    },
+    ImageVariantSpec {
+        name: "medium",
+        max_dimension: 720,
+    },
+    ImageVariantSpec {
+        name: "large",
+        max_dimension: 1080,
+    },
+];
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -42,8 +61,9 @@ async fn run() -> Result<()> {
         "worker starting media job loop"
     );
 
+    let storage = ObjectStorage::new(config.s3());
     let listener = create_listener(config.database_url()).await?;
-    let worker = Worker::new(pool, worker_id, listener);
+    let worker = Worker::new(pool, storage, worker_id, listener);
     worker.run().await
 }
 
@@ -55,14 +75,16 @@ async fn create_listener(database_url: &str) -> Result<PgListener> {
 
 struct Worker {
     pool: PgPool,
+    storage: ObjectStorage,
     worker_id: String,
     listener: PgListener,
 }
 
 impl Worker {
-    fn new(pool: PgPool, worker_id: String, listener: PgListener) -> Self {
+    fn new(pool: PgPool, storage: ObjectStorage, worker_id: String, listener: PgListener) -> Self {
         Self {
             pool,
+            storage,
             worker_id,
             listener,
         }
@@ -119,7 +141,7 @@ impl Worker {
             "claimed media job"
         );
 
-        match dispatch_job(&job).await {
+        match dispatch_job(&self.pool, &self.storage, &job).await {
             Ok(()) => {
                 media::mark_job_succeeded(&self.pool, job.id()).await?;
                 tracing::info!(job_id = %job.id(), "media job succeeded");
@@ -150,15 +172,45 @@ impl Worker {
     }
 }
 
-async fn dispatch_job(job: &MediaJob) -> Result<()> {
+async fn dispatch_job(pool: &PgPool, storage: &ObjectStorage, job: &MediaJob) -> Result<()> {
     match job.kind() {
-        MediaJobKind::ImageProcessing => handle_image_processing(job).await,
+        MediaJobKind::ImageProcessing => handle_image_processing(pool, storage, job).await,
         MediaJobKind::VideoProcessing => handle_video_processing(job).await,
     }
 }
 
-async fn handle_image_processing(job: &MediaJob) -> Result<()> {
-    validate_processing_payload(job)
+async fn handle_image_processing(
+    pool: &PgPool,
+    storage: &ObjectStorage,
+    job: &MediaJob,
+) -> Result<()> {
+    validate_processing_payload(job)?;
+
+    let Some(asset) = media::find_asset_by_id(pool, job.asset_id()).await? else {
+        return Err(anyhow!("media asset {} was not found", job.asset_id()));
+    };
+
+    if asset.kind() != MediaKind::Image {
+        return Err(anyhow!("media asset {} is not an image", asset.id()));
+    }
+
+    media::update_asset_status(pool, asset.id(), MediaAssetStatus::Processing).await?;
+
+    let original_bytes = storage.get_bytes(asset.original_key()).await?;
+    let processed =
+        tokio::task::spawn_blocking(move || build_image_variants(&asset, original_bytes)).await??;
+    let variants = upload_image_variants(storage, processed.variants).await?;
+
+    media::update_asset_processing_result(
+        pool,
+        processed.asset_id,
+        variants,
+        u32_to_i32(processed.original_width)?,
+        u32_to_i32(processed.original_height)?,
+    )
+    .await?;
+
+    Ok(())
 }
 
 async fn handle_video_processing(job: &MediaJob) -> Result<()> {
@@ -184,6 +236,84 @@ fn validate_processing_payload(job: &MediaJob) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ImageVariantSpec {
+    name: &'static str,
+    max_dimension: u32,
+}
+
+struct ProcessedImage {
+    asset_id: zeroclaw_core::models::MediaAssetId,
+    original_width: u32,
+    original_height: u32,
+    variants: Vec<ProcessedImageVariant>,
+}
+
+struct ProcessedImageVariant {
+    name: &'static str,
+    key: String,
+    width: u32,
+    height: u32,
+    bytes: Vec<u8>,
+}
+
+fn build_image_variants(asset: &MediaAsset, original_bytes: Vec<u8>) -> Result<ProcessedImage> {
+    let image = image::load_from_memory(&original_bytes)?;
+    let (original_width, original_height) = image.dimensions();
+    let mut variants = Vec::with_capacity(IMAGE_VARIANTS.len());
+
+    for spec in IMAGE_VARIANTS {
+        let resized = image.resize(spec.max_dimension, spec.max_dimension, FilterType::Lanczos3);
+        let key = format!("media/variants/{}/{}.jpg", asset.id(), spec.name);
+        let mut bytes = Vec::new();
+        let mut encoder = JpegEncoder::new_with_quality(&mut bytes, 85);
+        encoder.encode_image(&resized)?;
+
+        variants.push(ProcessedImageVariant {
+            name: spec.name,
+            key,
+            width: resized.width(),
+            height: resized.height(),
+            bytes,
+        });
+    }
+
+    Ok(ProcessedImage {
+        asset_id: asset.id(),
+        original_width,
+        original_height,
+        variants,
+    })
+}
+
+async fn upload_image_variants(
+    storage: &ObjectStorage,
+    variants: Vec<ProcessedImageVariant>,
+) -> Result<Value> {
+    let mut metadata = Map::new();
+
+    for variant in variants {
+        storage
+            .put_bytes(&variant.key, "image/jpeg", variant.bytes)
+            .await?;
+        metadata.insert(
+            variant.name.to_owned(),
+            json!({
+                "key": variant.key,
+                "width": variant.width,
+                "height": variant.height,
+                "content_type": "image/jpeg",
+            }),
+        );
+    }
+
+    Ok(Value::Object(metadata))
+}
+
+fn u32_to_i32(value: u32) -> Result<i32> {
+    i32::try_from(value).map_err(|_| anyhow!("image dimension {value} exceeds supported range"))
 }
 
 fn retry_backoff(attempt: i32) -> ChronoDuration {

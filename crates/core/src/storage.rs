@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use aws_sdk_s3::config::{Credentials, Region};
 use aws_sdk_s3::presigning::{PresigningConfig, PresigningConfigError};
+use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
 use thiserror::Error;
 
@@ -178,6 +179,46 @@ impl ObjectStorage {
             .send()
             .await
             .map_err(|error| storage_error("delete", error))?;
+
+        Ok(())
+    }
+
+    pub async fn get_bytes(&self, key: &str) -> Result<Vec<u8>, StorageError> {
+        let response = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|error| storage_error("get_bytes", error))?;
+
+        let bytes = response
+            .body
+            .collect()
+            .await
+            .map_err(|error| storage_error("get_bytes", error))?
+            .into_bytes()
+            .to_vec();
+
+        Ok(bytes)
+    }
+
+    pub async fn put_bytes(
+        &self,
+        key: &str,
+        content_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<(), StorageError> {
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .content_type(content_type)
+            .body(ByteStream::from(bytes))
+            .send()
+            .await
+            .map_err(|error| storage_error("put_bytes", error))?;
 
         Ok(())
     }
