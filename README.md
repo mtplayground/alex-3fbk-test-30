@@ -18,6 +18,14 @@ workspace starts with two binaries and one shared library:
 cargo build
 ```
 
+The React SPA lives in `web/`:
+
+```bash
+cd web
+npm install
+npm run build
+```
+
 ## API
 
 The API binary starts an Axum server on `HOST:PORT` and exposes `GET /healthz`.
