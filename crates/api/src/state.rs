@@ -1,5 +1,6 @@
 use redis::aio::ConnectionManager;
 use sqlx::PgPool;
+use zeroclaw_core::redis::RedisNamespace;
 use zeroclaw_core::storage::ObjectStorage;
 use zeroclaw_core::{JwtConfig, SmtpConfig};
 
@@ -7,6 +8,7 @@ use zeroclaw_core::{JwtConfig, SmtpConfig};
 pub struct AppState {
     db_pool: PgPool,
     redis_manager: ConnectionManager,
+    redis_namespace: RedisNamespace,
     jwt: JwtConfig,
     smtp: SmtpConfig,
     public_base_url: String,
@@ -17,6 +19,7 @@ impl AppState {
     pub fn new(
         db_pool: PgPool,
         redis_manager: ConnectionManager,
+        redis_namespace: RedisNamespace,
         jwt: JwtConfig,
         smtp: SmtpConfig,
         public_base_url: String,
@@ -25,6 +28,7 @@ impl AppState {
         Self {
             db_pool,
             redis_manager,
+            redis_namespace,
             jwt,
             smtp,
             public_base_url,
@@ -38,6 +42,10 @@ impl AppState {
 
     pub fn redis_manager(&self) -> ConnectionManager {
         self.redis_manager.clone()
+    }
+
+    pub const fn redis_namespace(&self) -> &RedisNamespace {
+        &self.redis_namespace
     }
 
     pub const fn jwt(&self) -> &JwtConfig {

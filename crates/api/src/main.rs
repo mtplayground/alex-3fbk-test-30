@@ -14,6 +14,7 @@ mod http;
 mod media;
 mod posts;
 mod profile;
+mod social;
 mod state;
 
 use crate::error::AppError;
@@ -45,11 +46,13 @@ async fn run() -> Result<(), AppError> {
     let state = AppState::new(
         pool,
         redis_manager,
+        redis_client.namespace().clone(),
         config.jwt().clone(),
         config.smtp().clone(),
         config.public_base_url().to_owned(),
         ObjectStorage::new(config.s3()),
     );
+    social::spawn_count_reconciliation(state.clone());
     let router = http::router(state);
     let listener = tokio::net::TcpListener::bind(&bind_address).await?;
 
