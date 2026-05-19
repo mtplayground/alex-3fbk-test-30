@@ -11,6 +11,7 @@ pub mod extractors;
 mod health;
 mod http;
 mod media;
+mod posts;
 mod profile;
 mod state;
 
