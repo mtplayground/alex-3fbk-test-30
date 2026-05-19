@@ -81,6 +81,9 @@ async fn load_auth_user(state: &AppState, token: &str) -> Result<AuthUser, AppEr
     let Some(user) = users::find_by_id(state.db_pool(), user_id).await? else {
         return Err(AppError::Unauthorized);
     };
+    if user.suspended_at().is_some() {
+        return Err(AppError::Unauthorized);
+    }
 
     Ok(AuthUser::new(user))
 }

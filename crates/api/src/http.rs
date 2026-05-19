@@ -2,6 +2,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use tower_http::trace::TraceLayer;
 
+use crate::admin::{list_pending_reports, take_report_action};
 use crate::auth::{forgot_password, login, logout, refresh, reset_password, signup, verify_email};
 use crate::comments::{create_comment, delete_comment, get_post_comments};
 use crate::conversations::{
@@ -42,6 +43,8 @@ pub fn router(state: AppState) -> Router {
         .route("/notifications", get(list_notifications))
         .route("/notifications/read-all", post(mark_all_notifications_read))
         .route("/notifications/unread-count", get(unread_notification_count))
+        .route("/admin/reports", get(list_pending_reports))
+        .route("/admin/reports/:id/actions", post(take_report_action))
         .route("/reports", post(create_report))
         .route("/explore", get(get_explore))
         .route("/feed", get(get_feed))

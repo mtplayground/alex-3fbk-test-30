@@ -350,6 +350,8 @@ pub struct User {
     link: Option<String>,
     avatar_key: Option<String>,
     is_private: bool,
+    is_admin: bool,
+    suspended_at: Option<DateTime<Utc>>,
     email_verified_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
 }
@@ -366,6 +368,8 @@ impl User {
         link: Option<String>,
         avatar_key: Option<String>,
         is_private: bool,
+        is_admin: bool,
+        suspended_at: Option<DateTime<Utc>>,
         email_verified_at: Option<DateTime<Utc>>,
         created_at: DateTime<Utc>,
     ) -> Self {
@@ -379,6 +383,8 @@ impl User {
             link,
             avatar_key,
             is_private,
+            is_admin,
+            suspended_at,
             email_verified_at,
             created_at,
         }
@@ -418,6 +424,14 @@ impl User {
 
     pub const fn is_private(&self) -> bool {
         self.is_private
+    }
+
+    pub const fn is_admin(&self) -> bool {
+        self.is_admin
+    }
+
+    pub fn suspended_at(&self) -> Option<&DateTime<Utc>> {
+        self.suspended_at.as_ref()
     }
 
     pub fn email_verified_at(&self) -> Option<&DateTime<Utc>> {
