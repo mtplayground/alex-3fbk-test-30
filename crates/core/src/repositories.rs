@@ -786,6 +786,35 @@ pub mod media {
         MediaAsset::try_from(row)
     }
 
+    pub async fn find_asset_by_id(
+        pool: &PgPool,
+        id: MediaAssetId,
+    ) -> sqlx::Result<Option<MediaAsset>> {
+        let row = sqlx::query_as::<_, MediaAssetRow>(
+            r#"
+            SELECT
+                id,
+                owner_id,
+                kind,
+                status,
+                original_key,
+                variants,
+                duration_ms,
+                width,
+                height,
+                created_at,
+                updated_at
+            FROM media_assets
+            WHERE id = $1
+            "#,
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(MediaAsset::try_from).transpose()
+    }
+
     pub async fn update_asset_status(
         pool: &PgPool,
         id: MediaAssetId,
