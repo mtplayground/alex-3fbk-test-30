@@ -915,6 +915,10 @@ impl MediaJob {
     pub const fn attempts(&self) -> i32 {
         self.attempts
     }
+
+    pub const fn max_attempts(&self) -> i32 {
+        self.max_attempts
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

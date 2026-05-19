@@ -852,28 +852,49 @@ pub mod media {
     pub async fn enqueue_job(pool: &PgPool, input: &CreateMediaJob) -> sqlx::Result<MediaJob> {
         let row = sqlx::query_as::<_, MediaJobRow>(
             r#"
-            INSERT INTO media_jobs (
-                asset_id,
-                kind,
-                payload,
-                max_attempts,
-                run_after
+            WITH inserted AS (
+                INSERT INTO media_jobs (
+                    asset_id,
+                    kind,
+                    payload,
+                    max_attempts,
+                    run_after
+                )
+                VALUES ($1, $2, $3, $4, COALESCE($5, now()))
+                RETURNING
+                    id,
+                    asset_id,
+                    kind,
+                    status,
+                    payload,
+                    attempts,
+                    max_attempts,
+                    run_after,
+                    locked_at,
+                    locked_by,
+                    last_error,
+                    created_at,
+                    updated_at
+            ),
+            notified AS (
+                SELECT pg_notify('media_jobs', id::text) FROM inserted
             )
-            VALUES ($1, $2, $3, $4, COALESCE($5, now()))
-            RETURNING
-                id,
-                asset_id,
-                kind,
-                status,
-                payload,
-                attempts,
-                max_attempts,
-                run_after,
-                locked_at,
-                locked_by,
-                last_error,
-                created_at,
-                updated_at
+            SELECT
+                inserted.id,
+                inserted.asset_id,
+                inserted.kind,
+                inserted.status,
+                inserted.payload,
+                inserted.attempts,
+                inserted.max_attempts,
+                inserted.run_after,
+                inserted.locked_at,
+                inserted.locked_by,
+                inserted.last_error,
+                inserted.created_at,
+                inserted.updated_at
+            FROM inserted
+            CROSS JOIN notified
             "#,
         )
         .bind(input.asset_id().as_uuid())
@@ -941,6 +962,48 @@ pub mod media {
         error: &str,
     ) -> sqlx::Result<MediaJob> {
         update_job_terminal_status(pool, id, MediaJobStatus::Failed, Some(error)).await
+    }
+
+    pub async fn retry_job(
+        pool: &PgPool,
+        id: MediaJobId,
+        run_after: DateTime<Utc>,
+        error: &str,
+    ) -> sqlx::Result<MediaJob> {
+        let row = sqlx::query_as::<_, MediaJobRow>(
+            r#"
+            UPDATE media_jobs
+            SET
+                status = 'queued',
+                run_after = $2,
+                locked_at = NULL,
+                locked_by = NULL,
+                last_error = $3,
+                updated_at = now()
+            WHERE id = $1
+            RETURNING
+                id,
+                asset_id,
+                kind,
+                status,
+                payload,
+                attempts,
+                max_attempts,
+                run_after,
+                locked_at,
+                locked_by,
+                last_error,
+                created_at,
+                updated_at
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(run_after)
+        .bind(error)
+        .fetch_one(pool)
+        .await?;
+
+        MediaJob::try_from(row)
     }
 
     async fn update_job_terminal_status(
