@@ -9,6 +9,11 @@ type LocationState = {
   };
 };
 
+const DEMO_LOGIN = {
+  email: 'alice@example.test',
+  password: 'password123',
+};
+
 export function LoginPage() {
   const auth = useAuth();
   const navigate = useNavigate();
@@ -22,15 +27,25 @@ export function LoginPage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    await submitLogin({ email, password });
+  }
+
+  async function handleDemoLogin() {
+    setEmail(DEMO_LOGIN.email);
+    setPassword(DEMO_LOGIN.password);
+    await submitLogin(DEMO_LOGIN);
+  }
+
+  async function submitLogin(credentials: typeof DEMO_LOGIN) {
     setError(null);
     setSubmitting(true);
 
     try {
-      if (isCommonDefaultCredential(email, password)) {
+      if (isCommonDefaultCredential(credentials.email, credentials.password)) {
         throw new Error('Default credentials are not accepted.');
       }
 
-      await auth.login({ email, password });
+      await auth.login(credentials);
       navigate(redirectTo, { replace: true });
     } catch (requestError) {
       setError(errorMessage(requestError));
@@ -78,6 +93,15 @@ export function LoginPage() {
           className="w-full rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
         >
           {isSubmitting ? 'Signing in' : 'Sign in'}
+        </button>
+
+        <button
+          type="button"
+          onClick={handleDemoLogin}
+          disabled={isSubmitting}
+          className="w-full rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+        >
+          {isSubmitting ? 'Signing in' : 'Guest / Demo Login'}
         </button>
       </form>
 
