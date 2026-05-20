@@ -34,6 +34,8 @@ direct messages, notifications, moderation, and local/staging seed data.
 - Rust workspace with `crates/api` for Axum HTTP/WebSocket serving,
   `crates/worker` for background jobs, and `crates/core` for shared config,
   models, auth, database, Redis, storage, and repositories.
+- The API service also serves the built React app from `web/dist`, including
+  SPA fallback routing for browser routes such as `/`, `/login`, and `/p/:id`.
 - PostgreSQL is the only persistent datastore. Schema changes live in
   `migrations/` and are wired through embedded SQLx migrations.
 - Redis is used for cache, rate limiting, presence, and realtime fan-out.
