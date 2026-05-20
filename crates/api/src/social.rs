@@ -69,6 +69,7 @@ pub fn spawn_count_reconciliation(state: AppState) {
     tokio::spawn(async move {
         let mut interval =
             tokio::time::interval(Duration::from_secs(COUNT_RECONCILIATION_INTERVAL_SECONDS));
+        interval.tick().await;
 
         loop {
             interval.tick().await;
