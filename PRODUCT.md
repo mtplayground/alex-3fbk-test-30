@@ -1,6 +1,6 @@
-# ZeroClaw Product Contract
+# Yet another Instagram Product Contract
 
-ZeroClaw is an Instagram-style social application. The merged project includes a
+Yet another Instagram is an Instagram-style social application. The merged project includes a
 Rust backend, a background worker, and a Vite React SPA that together support
 accounts, profiles, media posts, comments, social graph, feeds, stories, reels,
 direct messages, notifications, moderation, and local/staging seed data.

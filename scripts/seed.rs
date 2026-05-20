@@ -19,7 +19,7 @@ type SeedResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 const DEMO_PASSWORD: &str = "password123";
 const SENTINEL_CAPTION: &str =
-    "Welcome to ZeroClaw seed data #zeroclaw #welcome with @bob and @mira";
+    "Welcome to Yet another Instagram seed data #yetanotherinstagram #welcome with @bob and @mira";
 
 #[tokio::main]
 async fn main() -> SeedResult<()> {
@@ -96,7 +96,7 @@ async fn seed(pool: &PgPool) -> SeedResult<()> {
         UserSeed {
             email: "admin@example.test",
             handle: "admin",
-            display_name: "ZeroClaw Admin",
+            display_name: "Yet another Instagram Admin",
             bio: "Demo moderation account.",
             link: None,
             avatar_key: Some("seed/avatars/admin.jpg"),
@@ -151,7 +151,7 @@ async fn seed(pool: &PgPool) -> SeedResult<()> {
             caption: SENTINEL_CAPTION.to_owned(),
             location: Some("San Francisco, CA".to_owned()),
             media_ids: vec![alice_photo.as_uuid()],
-            hashtags: vec!["zeroclaw".to_owned(), "welcome".to_owned()],
+            hashtags: vec!["yetanotherinstagram".to_owned(), "welcome".to_owned()],
             mentions: vec![
                 posts::ParsedMention {
                     handle: "bob".to_owned(),

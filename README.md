@@ -1,6 +1,6 @@
-# ZeroClaw
+# Yet another Instagram
 
-ZeroClaw is a Rust workspace for an Instagram-style social application. The
+Yet another Instagram is a Rust workspace for an Instagram-style social application. The
 workspace starts with two binaries and one shared library:
 
 - `crates/api`: HTTP API entry point. The Axum server is added in a later issue.

@@ -314,7 +314,7 @@ async fn send_verification_email(state: &AppState, user: &User) -> Result<(), Ap
     .await?;
     let url = auth_flow_url(state.public_base_url(), "verify-email", &token);
     let body = format!(
-        "Hello {},\n\nVerify your ZeroClaw email address by opening this link:\n\n{}\n\nThis link expires in {} hours.",
+        "Hello {},\n\nVerify your Yet another Instagram email address by opening this link:\n\n{}\n\nThis link expires in {} hours.",
         user.display_name(),
         url,
         EMAIL_VERIFICATION_TTL_HOURS
@@ -323,7 +323,7 @@ async fn send_verification_email(state: &AppState, user: &User) -> Result<(), Ap
     send_email(
         state.smtp(),
         user.email(),
-        "Verify your ZeroClaw email",
+        "Verify your Yet another Instagram email",
         body,
     )
     .await?;
@@ -341,7 +341,7 @@ async fn send_password_reset_email(state: &AppState, user: &User) -> Result<(), 
     .await?;
     let url = auth_flow_url(state.public_base_url(), "reset-password", &token);
     let body = format!(
-        "Hello {},\n\nReset your ZeroClaw password by opening this link:\n\n{}\n\nThis link expires in {} minutes. If you did not request it, you can ignore this email.",
+        "Hello {},\n\nReset your Yet another Instagram password by opening this link:\n\n{}\n\nThis link expires in {} minutes. If you did not request it, you can ignore this email.",
         user.display_name(),
         url,
         PASSWORD_RESET_TTL_MINUTES
@@ -350,7 +350,7 @@ async fn send_password_reset_email(state: &AppState, user: &User) -> Result<(), 
     send_email(
         state.smtp(),
         user.email(),
-        "Reset your ZeroClaw password",
+        "Reset your Yet another Instagram password",
         body,
     )
     .await?;

@@ -14,9 +14,9 @@ Issue dependency:
 - Issue #113 is independent. It is a public-facing copy rebrand only.
 
 Implementation approach for #113:
-- Search for externally visible uses of `ZeroClaw` and replace them with
-  `Yet another Instagram` in UI text, browser metadata, email subject/body copy,
-  Reels share copy, documentation, seed/demo content, and test fixtures.
+- Search for externally visible uses of the old display name and replace them
+  with `Yet another Instagram` in UI text, browser metadata, email subject/body
+  copy, Reels share copy, documentation, seed/demo content, and test fixtures.
 - Keep internal identifiers unchanged: crate/package names, binary names,
   `SERVICE_NAME`, `REDIS_KEY_PREFIX`, `ZEROCLAW_SEED_CONFIRM`, deployment paths,
   systemd service names, Rust module names, and other operational identifiers.
