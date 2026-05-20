@@ -1,20 +1,30 @@
-Architecture plan for Issue #111: Guest / Demo login button
+Architecture plan for Issue #113: Rebrand product display name
 
 Project shape:
-- Rust Axum API in `crates/api`, shared domain/config/repositories in `crates/core`, worker jobs in `crates/worker`.
-- React/Vite/Tailwind SPA in `web/`, with routes under `web/src/routes`, feature modules under `web/src/features`, and app shell/provider wiring under `web/src/app`.
-- PostgreSQL remains the persistent datastore; seeded demo data is expected to provide `alice@example.test` with password `password123`.
+- Rust Axum API in `crates/api`, shared domain/config/repositories in
+  `crates/core`, and background jobs in `crates/worker`.
+- React/Vite/Tailwind SPA in `web/`, with browser routes under
+  `web/src/routes`, feature modules under `web/src/features`, and shell/provider
+  wiring under `web/src/app`.
+- Documentation and operational guidance live at the repository root
+  (`README.md`, `PRODUCT.md`, `DEPLOY.md`) and seed/demo content lives under
+  `scripts/` plus backend seed helpers.
 
 Issue dependency:
-- Issue #111 depends on the existing login endpoint and seeded demo user. No backend route should be added.
+- Issue #113 is independent. It is a public-facing copy rebrand only.
 
-Implementation approach for #111:
-- Update `web/src/routes/LoginPage.tsx` to add a `Guest / Demo Login` button.
-- Reuse the existing `auth.login({ email, password })` flow with `alice@example.test` / `password123`.
-- Share the existing loading/error behavior so demo login disables controls while submitting and reports failures through the current error message area.
-- Preserve the existing redirect behavior after successful login.
+Implementation approach for #113:
+- Search for externally visible uses of `ZeroClaw` and replace them with
+  `Yet another Instagram` in UI text, browser metadata, email subject/body copy,
+  Reels share copy, documentation, seed/demo content, and test fixtures.
+- Keep internal identifiers unchanged: crate/package names, binary names,
+  `SERVICE_NAME`, `REDIS_KEY_PREFIX`, `ZEROCLAW_SEED_CONFIRM`, deployment paths,
+  systemd service names, Rust module names, and other operational identifiers.
+- Validate with the existing Rust and web build path after copy changes.
 
 Key decisions:
-- Keep demo login frontend-only because the issue explicitly forbids a new `/auth/guest` endpoint.
-- Do not persist secrets or demo credentials outside the UI behavior requested by the issue.
-- Validate with the web build and avoid changes to backend auth semantics.
+- Treat this as a text/content boundary change, not a rename of the codebase.
+- Prefer targeted replacements in owned source/docs over broad mechanical renames
+  that could alter internal identifiers.
+- Preserve existing product behavior and data model; no database or API contract
+  changes are expected.
