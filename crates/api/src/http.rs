@@ -2,6 +2,7 @@ use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 use crate::abuse::rate_limit_write_requests;
@@ -102,6 +103,9 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/me", axum::routing::patch(update_me))
         .route("/me/avatar", post(create_avatar_upload))
+        .fallback_service(
+            ServeDir::new("web/dist").not_found_service(ServeFile::new("web/dist/index.html")),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             rate_limit_write_requests,
