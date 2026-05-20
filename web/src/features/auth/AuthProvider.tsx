@@ -1,4 +1,4 @@
-import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, ReactNode, useCallback, useContext, useMemo, useState } from 'react';
 
 import {
   forgotPassword as forgotPasswordRequest,
@@ -7,7 +7,6 @@ import {
   logout as logoutRequest,
   resetPassword as resetPasswordRequest,
   signup as signupRequest,
-  refreshAccessToken,
   type LoginPayload,
   type SignupPayload,
 } from './api';
@@ -38,33 +37,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const user = useSessionStore((state) => state.user);
   const accessToken = useSessionStore((state) => state.accessToken);
   const setSession = useSessionStore((state) => state.setSession);
-  const setAccessToken = useSessionStore((state) => state.setAccessToken);
   const clearSession = useSessionStore((state) => state.clearSession);
-  const [status, setStatus] = useState<AuthStatus>('checking');
-
-  useEffect(() => {
-    let active = true;
-
-    refreshAccessToken()
-      .then((response) => {
-        if (!active) {
-          return;
-        }
-        setAccessToken(response.access_token);
-        setStatus('authenticated');
-      })
-      .catch(() => {
-        if (!active) {
-          return;
-        }
-        clearSession();
-        setStatus('anonymous');
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [clearSession, setAccessToken]);
+  const [status, setStatus] = useState<AuthStatus>(accessToken ? 'authenticated' : 'anonymous');
 
   const signup = useCallback(
     async (payload: SignupPayload) => {

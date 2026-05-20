@@ -26,6 +26,10 @@ export function LoginPage() {
     setSubmitting(true);
 
     try {
+      if (isCommonDefaultCredential(email, password)) {
+        throw new Error('Default credentials are not accepted.');
+      }
+
       await auth.login({ email, password });
       navigate(redirectTo, { replace: true });
     } catch (requestError) {
@@ -91,4 +95,14 @@ export function LoginPage() {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Request failed';
+}
+
+function isCommonDefaultCredential(email: string, password: string) {
+  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedPassword = password.trim().toLowerCase();
+
+  return (
+    ['admin', 'admin@example.com'].includes(normalizedEmail) &&
+    ['change-me', 'password'].includes(normalizedPassword)
+  );
 }
