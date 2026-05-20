@@ -7,9 +7,10 @@ direct messages, notifications, moderation, and local/staging seed data.
 
 ## Current Capabilities
 
-- Account flows: signup, login, guest/demo login from the login page,
-  refresh/logout, email verification, password reset, bearer-token auth,
-  httpOnly refresh cookie, and protected frontend routes.
+- Account flows: signup, login, guest/demo login from the login page using the
+  seeded `alice@example.test` demo account, refresh/logout, email verification,
+  password reset, bearer-token auth, httpOnly refresh cookie, and protected
+  frontend routes.
 - Profiles: public profile lookup, current-user profile editing, avatar upload
   presign flow, profile grids, follow/unfollow, private-account follow requests,
   followers/following lists, blocks, reports, and admin report review actions.
