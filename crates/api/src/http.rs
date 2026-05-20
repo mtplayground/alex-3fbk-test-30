@@ -1,8 +1,9 @@
 use axum::extract::DefaultBodyLimit;
 use axum::middleware;
+use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
-use axum::Router;
-use tower_http::services::{ServeDir, ServeFile};
+use axum::{http::StatusCode, Router};
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
 use crate::abuse::rate_limit_write_requests;
@@ -103,9 +104,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/me", axum::routing::patch(update_me))
         .route("/me/avatar", post(create_avatar_upload))
-        .fallback_service(
-            ServeDir::new("web/dist").not_found_service(ServeFile::new("web/dist/index.html")),
-        )
+        .nest_service("/assets", ServeDir::new("web/dist/assets"))
+        .fallback(spa_index)
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             rate_limit_write_requests,
@@ -113,4 +113,15 @@ pub fn router(state: AppState) -> Router {
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+async fn spa_index() -> impl IntoResponse {
+    match tokio::fs::read_to_string("web/dist/index.html").await {
+        Ok(index) => Html(index).into_response(),
+        Err(error) => (
+            StatusCode::NOT_FOUND,
+            format!("SPA bundle missing: {error}"),
+        )
+            .into_response(),
+    }
 }
