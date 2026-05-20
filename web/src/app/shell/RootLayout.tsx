@@ -19,7 +19,7 @@ export function RootLayout() {
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
           <NavLink to="/" className="text-xl font-semibold tracking-normal">
-            ZeroClaw
+            Yet another Instagram
           </NavLink>
           <nav className="hidden items-center gap-1 md:flex">
             {navItems.map((item) => (

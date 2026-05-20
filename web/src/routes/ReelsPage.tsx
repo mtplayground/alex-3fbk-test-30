@@ -179,7 +179,7 @@ function ReelSlide({
         share?: (data: { title: string; url: string }) => Promise<void>;
       };
       if (navigatorWithShare.share) {
-        await navigatorWithShare.share({ title: `@${reel.author.handle} on ZeroClaw`, url });
+        await navigatorWithShare.share({ title: `@${reel.author.handle} on Yet another Instagram`, url });
       } else {
         await navigator.clipboard.writeText(url);
         setShareStatus('Copied');

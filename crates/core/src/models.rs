@@ -1284,13 +1284,13 @@ mod tests {
     fn create_user_normalizes_lookup_fields() {
         let input = CreateUser::new(
             "  USER@example.COM ",
-            "  ZeroClaw ",
+            "  YetAnotherInstagram ",
             "password-hash",
             "Zero Claw",
         );
 
         assert_eq!(input.normalized_email(), "user@example.com");
-        assert_eq!(input.normalized_handle(), "zeroclaw");
+        assert_eq!(input.normalized_handle(), "yetanotherinstagram");
     }
 
     #[test]

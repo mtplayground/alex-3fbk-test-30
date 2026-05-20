@@ -1,4 +1,4 @@
-# ZeroClaw Deployment Runbook
+# Yet another Instagram Deployment Runbook
 
 This runbook describes a bare self-hosted deployment for one Linux host running
 PostgreSQL, Redis, the Rust API, the Rust worker, and the built React SPA.
@@ -13,7 +13,7 @@ PostgreSQL, Redis, the Rust API, the Rust worker, and the built React SPA.
 - SMTP credentials for auth email flows.
 - A reverse proxy such as nginx or Caddy with TLS.
 
-ZeroClaw stores persistent application state only in PostgreSQL. Redis is used
+Yet another Instagram stores persistent application state only in PostgreSQL. Redis is used
 for cache, rate limits, presence, and realtime fan-out.
 
 ## Build
@@ -103,7 +103,7 @@ Create `/etc/systemd/system/zeroclaw-api.service`:
 
 ```ini
 [Unit]
-Description=ZeroClaw API
+Description=Yet another Instagram API
 After=network-online.target postgresql.service redis-server.service
 Wants=network-online.target
 
@@ -127,7 +127,7 @@ Create `/etc/systemd/system/zeroclaw-worker.service`:
 
 ```ini
 [Unit]
-Description=ZeroClaw Worker
+Description=Yet another Instagram Worker
 After=network-online.target postgresql.service redis-server.service
 Wants=network-online.target
 
