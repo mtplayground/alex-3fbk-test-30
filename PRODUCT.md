@@ -26,6 +26,8 @@ direct messages, notifications, moderation, and local/staging seed data.
 - Messaging and realtime: conversation/message schema, DM REST APIs, WebSocket
   gateway with JWT auth, Redis fan-out, typing/read/presence events, frontend
   realtime hooks, inbox/thread UI, and notification drawer/badges.
+- UI shell: responsive navigation, protected-route handling, and a persisted
+  light/dark/system theme switcher using Tailwind class-based dark mode.
 - Operations and tests: local dev orchestration, Playwright E2E setup, Rust unit
   tests, deployment runbook, and an idempotent seed command for demo users and
   content.
@@ -49,6 +51,9 @@ direct messages, notifications, moderation, and local/staging seed data.
 - Services read configuration from environment variables; `.env.example`
   documents required values.
 - API defaults to `0.0.0.0:8080`; local dev scripts may override ports.
+- Theme preference is client-side only: `localStorage` stores the selected
+  mode, `system` follows `prefers-color-scheme`, and the SPA toggles the root
+  `dark` class before hydration to avoid theme flash.
 - Backend logging uses JSON tracing.
 - Access tokens are short-lived JWTs; refresh tokens are stored and rotated in
   PostgreSQL.
