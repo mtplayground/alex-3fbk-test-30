@@ -1,30 +1,33 @@
-Architecture plan for Issue #113: Rebrand product display name
+Architecture plan for Issue #115: Theme switcher
 
 Project shape:
-- Rust Axum API in `crates/api`, shared domain/config/repositories in
-  `crates/core`, and background jobs in `crates/worker`.
-- React/Vite/Tailwind SPA in `web/`, with browser routes under
-  `web/src/routes`, feature modules under `web/src/features`, and shell/provider
-  wiring under `web/src/app`.
-- Documentation and operational guidance live at the repository root
-  (`README.md`, `PRODUCT.md`, `DEPLOY.md`) and seed/demo content lives under
-  `scripts/` plus backend seed helpers.
+- React/Vite/Tailwind SPA in `web/`, with provider wiring in
+  `web/src/app/providers.tsx`, layout/navigation in
+  `web/src/app/shell/RootLayout.tsx`, and global CSS in `web/src/styles.css`.
+- Tailwind configuration lives in `web/tailwind.config.js`; browser bootstrap
+  and metadata live in `web/index.html`.
+- The Rust API/worker crates are not expected to change for this issue because
+  theme preference is client-side state stored in `localStorage`.
 
 Issue dependency:
-- Issue #113 is independent. It is a public-facing copy rebrand only.
+- Issue #115 depends on the existing SPA shell and Tailwind setup. It has no
+  database or backend API dependency.
 
-Implementation approach for #113:
-- Search for externally visible uses of the old display name and replace them
-  with `Yet another Instagram` in UI text, browser metadata, email subject/body
-  copy, Reels share copy, documentation, seed/demo content, and test fixtures.
-- Keep internal identifiers unchanged: crate/package names, binary names,
-  `SERVICE_NAME`, `REDIS_KEY_PREFIX`, `ZEROCLAW_SEED_CONFIRM`, deployment paths,
-  systemd service names, Rust module names, and other operational identifiers.
-- Validate with the existing Rust and web build path after copy changes.
+Implementation approach for #115:
+- Add a frontend `ThemeProvider` that exposes `light`, `dark`, and `system`
+  modes through React context.
+- Persist the selected mode in `localStorage`, resolve `system` through
+  `prefers-color-scheme`, and update `document.documentElement` with the `dark`
+  class whenever the effective theme changes.
+- Enable Tailwind `darkMode: 'class'` and add baseline dark variants to the root
+  layout/navigation so the shell is readable in dark mode.
+- Add a compact three-segment control in the top navigation for theme selection.
+- Add an early inline script in `web/index.html` to apply the saved/system theme
+  before React hydrates, reducing flash of incorrect theme.
 
 Key decisions:
-- Treat this as a text/content boundary change, not a rename of the codebase.
-- Prefer targeted replacements in owned source/docs over broad mechanical renames
-  that could alter internal identifiers.
-- Preserve existing product behavior and data model; no database or API contract
-  changes are expected.
+- Keep theme state entirely client-side; no schema, API, or session changes.
+- Use existing app provider/layout patterns rather than introducing a global
+  state library dependency for this small preference.
+- Make `system` reactive to OS theme changes while preserving the user's stored
+  mode selection.
