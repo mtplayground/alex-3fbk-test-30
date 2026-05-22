@@ -10,6 +10,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.dark {
+  color-scheme: dark;
+}
+
 body {
   margin: 0;
 }
