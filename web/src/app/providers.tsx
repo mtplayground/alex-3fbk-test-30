@@ -3,6 +3,7 @@ import { ReactNode, useState } from 'react';
 
 import { AuthProvider } from '../features/auth/AuthProvider';
 import { RealtimeProvider } from '../features/realtime/RealtimeProvider';
+import { ThemeProvider } from '../features/theme/ThemeProvider';
 
 type AppProvidersProps = {
   children: ReactNode;
@@ -23,9 +24,11 @@ export function AppProviders({ children }: AppProvidersProps) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <RealtimeProvider>{children}</RealtimeProvider>
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <RealtimeProvider>{children}</RealtimeProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }
